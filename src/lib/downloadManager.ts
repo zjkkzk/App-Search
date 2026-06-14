@@ -3,13 +3,13 @@
  * - 支持最多 3 个并发下载
  * - 每个任务可暂停 / 恢复 / 取消
  * - 实时回调：进度、速度（bytes/s）、完成、失败
- * - Android：下载完成后自动将文件移至 Downloads/开源应用商店/ 公共目录（SAF）
+ * - Android：下载完成后自动将文件移至 Downloads/开源应用搜索/ 公共目录（SAF）
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
-const APP_FOLDER_NAME = '开源应用商店';
+const APP_FOLDER_NAME = '开源应用搜索';
 const SAF_URI_KEY = '@openappstore/saf_downloads_uri';
 
 // 内存缓存 SAF 目录 URI；undefined = 尚未初始化，null = 无权限/非 Android
@@ -37,7 +37,7 @@ async function loadSafUri(): Promise<string | null> {
 
 /**
  * 弹出系统文件夹选择器，引导用户授权 Download 目录。
- * 授权成功后自动在其中创建「开源应用商店」子目录并持久化 URI。
+ * 授权成功后自动在其中创建「开源应用搜索」子目录并持久化 URI。
  * 返回 true 表示已成功获取目录权限。
  */
 export async function requestDownloadsPermission(): Promise<boolean> {
@@ -49,7 +49,7 @@ export async function requestDownloadsPermission(): Promise<boolean> {
     );
     if (!result.granted) return false;
 
-    // 尝试在所选目录下创建「开源应用商店」子目录
+    // 尝试在所选目录下创建「开源应用搜索」子目录
     let finalUri = result.directoryUri;
     try {
       finalUri = await (FileSystem.StorageAccessFramework as any).makeDirectoryAsync(
@@ -233,7 +233,7 @@ async function startTask(id: string) {
   task.status = 'downloading';
   notify(task);
 
-  // Android 下载到临时路径，完成后通过 SAF 移至 Downloads/开源应用商店/
+  // Android 下载到临时路径，完成后通过 SAF 移至 Downloads/开源应用搜索/
   // 其他平台直接下载到 documentDirectory 的 APP 子目录
   const dir = (FileSystem.documentDirectory ?? '') +
     (Platform.OS === 'android' ? `dl_temp_${id}/` : `${APP_FOLDER_NAME}/`);
@@ -290,7 +290,7 @@ async function startTask(id: string) {
       t.status = 'completed';
       t.progress = 1;
       t.speed = 0;
-      // Android：将临时文件移到 SAF Downloads/开源应用商店/，非 Android 直接用原路径
+      // Android：将临时文件移到 SAF Downloads/开源应用搜索/，非 Android 直接用原路径
       if (Platform.OS === 'android') {
         t.localUri = await moveToSafDownloads(result.uri, task.filename);
         // 清理空的临时目录
