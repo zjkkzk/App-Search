@@ -1,18 +1,19 @@
 import { Platform } from 'react-native'
-import * as SQLite from 'expo-sqlite'
 
 // Web 端：GitHub Pages 不支持 OPFS 所需的跨域隔离头，SQLite 不可用
+// expo-sqlite 改为动态 import，避免模块初始化时的任何潜在问题
 // 所有函数返回空结果，不抛出异常，保证 Web 端正常渲染
 const IS_WEB = Platform.OS === 'web'
 
-// 将 dbPromise 挂载到 globalThis，防止 Web HMR 热更新后模块重新执行
-// 导致重复调用 openDatabaseAsync → 同一 OPFS 文件同时有两个 SyncAccessHandle → NoModificationAllowedError
+// 将 dbPromise 挂载到 globalThis，防止热更新后重复初始化
 const g = globalThis as any
 
 function initDb() {
   if (IS_WEB) return Promise.resolve(null)
   if (!g.__openappstoreDb) {
-    g.__openappstoreDb = SQLite.openDatabaseAsync('openappstore.db').then(async (db) => {
+    g.__openappstoreDb = import('expo-sqlite').then(({ openDatabaseAsync }) =>
+      openDatabaseAsync('openappstore.db')
+    ).then(async (db) => {
       await db.execAsync(`
         CREATE TABLE IF NOT EXISTS favorites (
           id TEXT PRIMARY KEY,
@@ -58,10 +59,10 @@ function initDb() {
       return null
     })
   }
-  return g.__openappstoreDb as Promise<SQLite.SQLiteDatabase>
+  return g.__openappstoreDb as Promise<any>
 }
 
-async function getDb(): Promise<SQLite.SQLiteDatabase | null> {
+async function getDb(): Promise<any | null> {
   return initDb()
 }
 
@@ -108,7 +109,7 @@ export async function removeFavorite(appId: number): Promise<void> {
 export async function isFavorite(appId: number): Promise<boolean> {
   const db = await getDb()
   if (!db) return false
-  const result = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM favorites WHERE app_id = ?', appId)
+  const result = await db.getFirstAsync('SELECT COUNT(*) as count FROM favorites WHERE app_id = ?', appId) as { count: number } | null
   return (result?.count ?? 0) > 0
 }
 
@@ -124,7 +125,7 @@ export async function getFavorites(groupName?: string): Promise<any[]> {
 export async function getFavoriteGroups(): Promise<string[]> {
   const db = await getDb()
   if (!db) return ['全部收藏']
-  const rows = await db.getAllAsync<{ group_name: string }>('SELECT DISTINCT group_name FROM favorites')
+  const rows = await db.getAllAsync('SELECT DISTINCT group_name FROM favorites') as { group_name: string }[]
   const groups = rows.map((r) => r.group_name)
   if (!groups.includes('全部收藏')) groups.unshift('全部收藏')
   return groups
@@ -187,7 +188,7 @@ export async function addSearchHistory(keyword: string): Promise<void> {
     keyword,
     new Date().toISOString()
   )
-  const rows = await db.getAllAsync<{ id: string }>('SELECT id FROM search_history ORDER BY searched_at DESC LIMIT 100 OFFSET 20')
+  const rows = await db.getAllAsync('SELECT id FROM search_history ORDER BY searched_at DESC LIMIT 100 OFFSET 20') as { id: string }[]
   for (const row of rows) {
     await db.runAsync('DELETE FROM search_history WHERE id = ?', row.id)
   }
@@ -196,7 +197,7 @@ export async function addSearchHistory(keyword: string): Promise<void> {
 export async function getSearchHistory(): Promise<string[]> {
   const db = await getDb()
   if (!db) return []
-  const rows = await db.getAllAsync<{ keyword: string }>('SELECT keyword FROM search_history ORDER BY searched_at DESC LIMIT 20')
+  const rows = await db.getAllAsync('SELECT keyword FROM search_history ORDER BY searched_at DESC LIMIT 20') as { keyword: string }[]
   return rows.map((r) => r.keyword)
 }
 
@@ -209,18 +210,18 @@ export async function clearSearchHistory(): Promise<void> {
 export async function getFavoriteStats(): Promise<{ total: number; byGroup: Record<string, number>; byPlatform: Record<string, number> }> {
   const db = await getDb()
   if (!db) return { total: 0, byGroup: {}, byPlatform: {} }
-  const totalResult = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM favorites')
+  const totalResult = await db.getFirstAsync('SELECT COUNT(*) as count FROM favorites') as { count: number } | null
   const total = totalResult?.count ?? 0
 
-  const groupRows = await db.getAllAsync<{ group_name: string; count: number }>(
+  const groupRows = await db.getAllAsync(
     'SELECT group_name, COUNT(*) as count FROM favorites GROUP BY group_name'
-  )
+  ) as { group_name: string; count: number }[]
   const byGroup: Record<string, number> = {}
   for (const row of groupRows) {
     byGroup[row.group_name] = row.count
   }
 
-  const allFavorites = await db.getAllAsync<{ platforms: string }>('SELECT platforms FROM favorites')
+  const allFavorites = await db.getAllAsync('SELECT platforms FROM favorites') as { platforms: string }[]
   const byPlatform: Record<string, number> = {}
   for (const fav of allFavorites) {
     try {
