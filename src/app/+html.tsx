@@ -33,6 +33,13 @@ export default function Root({ children }: { children: React.ReactNode }) {
             window.__diagLog = function(msg) {
               show('[Debug] ' + msg, '#2980b9', 'top:0');
             };
+            // 5秒后检查 React 是否已挂载
+            setTimeout(function() {
+              var root = document.getElementById('root');
+              if (!root || !root.firstElementChild) {
+                show('[诊断] React 未挂载 — root 元素在 5s 后仍为空\\n请查看上方是否有 JS Error / Promise Rejection', '#16a085', 'bottom:0');
+              }
+            }, 5000);
           })();
         ` }} />
         <ScrollViewStyleReset />
