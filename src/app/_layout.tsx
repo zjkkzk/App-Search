@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View, Text, Pressable } from 'react-native';
+import { initToken } from '@/lib/token';
 import "../global.css";
 
 /** 全局错误边界：捕获任何渲染错误，显示可见提示而非白屏 */
@@ -43,10 +44,8 @@ class ErrorBoundary extends React.Component<
 
 export default function RootLayout() {
   useEffect(() => {
-    // 异步初始化 token，不阻塞渲染
-    import('@/lib/token')
-      .then((mod) => mod.initToken())
-      .catch(() => {});
+    // 静态导入，避免产生 lazy chunk 导致 web 白屏
+    initToken().catch(() => {});
   }, []);
 
   return (
