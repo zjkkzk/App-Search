@@ -14,7 +14,7 @@ export default function AppCard({ app }: AppCardProps) {
 
   const handlePress = () => {
     router.push({
-      pathname: `/(app)/detail/${app.id}`,
+      pathname: `/detail/${app.id}`,
       params: { owner: app.owner, repo: app.repo },
     } as any);
   };
