@@ -85,9 +85,9 @@ export async function isFavorite(appId: number): Promise<boolean> {
     return webGet<FavoriteItem[]>('oas_favorites', []).some((f) => f.app_id === appId);
   }
   const db = await initDb();
-  const row = await db.getFirstAsync<{ cnt: number }>(
+  const row = await db.getFirstAsync(
     'SELECT COUNT(*) as cnt FROM favorites WHERE app_id = ?', [appId]
-  );
+  ) as { cnt: number } | null;
   return (row?.cnt ?? 0) > 0;
 }
 
@@ -96,8 +96,8 @@ export async function getFavorites(): Promise<FavoriteItem[]> {
     return webGet<FavoriteItem[]>('oas_favorites', []);
   }
   const db = await initDb();
-  const rows = await db.getAllAsync<any>('SELECT * FROM favorites ORDER BY added_at DESC');
-  return rows.map((r) => ({
+  const rows = await db.getAllAsync('SELECT * FROM favorites ORDER BY added_at DESC') as any[];
+  return rows.map((r: any) => ({
     ...r,
     platforms: tryParse(r.platforms, []),
     tags: tryParse(r.tags, []),
@@ -109,7 +109,7 @@ export async function getFavoriteStats(): Promise<{ total: number }> {
     return { total: webGet<FavoriteItem[]>('oas_favorites', []).length };
   }
   const db = await initDb();
-  const row = await db.getFirstAsync<{ cnt: number }>('SELECT COUNT(*) as cnt FROM favorites');
+  const row = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM favorites') as { cnt: number } | null;
   return { total: row?.cnt ?? 0 };
 }
 
@@ -133,7 +133,7 @@ export async function addDownloadRecord(record: Omit<DownloadRecord, 'id'>): Pro
 export async function getDownloadHistory(): Promise<DownloadRecord[]> {
   if (IS_WEB) return webGet<DownloadRecord[]>('oas_downloads', []);
   const db = await initDb();
-  return db.getAllAsync<DownloadRecord>('SELECT * FROM download_history ORDER BY download_time DESC LIMIT 100');
+  return db.getAllAsync('SELECT * FROM download_history ORDER BY download_time DESC LIMIT 100') as Promise<DownloadRecord[]>;
 }
 
 export async function clearDownloadHistory(): Promise<void> {
@@ -160,8 +160,8 @@ export async function addSearchHistory(keyword: string): Promise<void> {
 export async function getSearchHistory(): Promise<string[]> {
   if (IS_WEB) return webGet<string[]>('oas_search_history', []);
   const db = await initDb();
-  const rows = await db.getAllAsync<{ keyword: string }>('SELECT keyword FROM search_history ORDER BY searched_at DESC LIMIT 20');
-  return rows.map((r) => r.keyword);
+  const rows = await db.getAllAsync('SELECT keyword FROM search_history ORDER BY searched_at DESC LIMIT 20') as { keyword: string }[];
+  return rows.map((r: { keyword: string }) => r.keyword);
 }
 
 export async function clearSearchHistory(): Promise<void> {
