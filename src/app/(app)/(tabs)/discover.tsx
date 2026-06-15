@@ -177,7 +177,7 @@ export default function DiscoverTab() {
   );
 
   return (
-    <SafeAreaView className="flex-1 bg-background" edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8' }} edges={['top']}>
       <FlatList
         data={apps}
         renderItem={({ item }) => <AppCard app={item} />}
