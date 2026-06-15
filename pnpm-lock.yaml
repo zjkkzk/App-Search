@@ -20,9 +20,6 @@ packageExtensionsChecksum: sha256-JM1guGKdUDmbuw7Yx70p1kYSxYUUGRziiDEc1hJra6Y=
 pnpmfileChecksum: sha256-hL0R1rW3ATkPpp1AMuu6SKkwTQGpTmXHkja3qETvd3U=
 
 patchedDependencies:
-  '@shopify/react-native-skia@2.4.18':
-    hash: daf0050c82cb2494564e4244a4f5cd06787ee8817b054903f9e1e5eb0d734fa0
-    path: patches/@shopify__react-native-skia@2.4.18.patch
   expo@55.0.6:
     hash: d2507f55976f6c5da8f35d26906f4bd46415e042570afc3bd7c543c86abc5a61
     path: patches/expo@55.0.6.patch
