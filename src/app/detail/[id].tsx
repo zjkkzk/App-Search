@@ -22,24 +22,47 @@ function formatCount(n: number) {
 }
 
 /**
- * 预处理 Markdown：
- * 1. 移除 HTML 块（整行 HTML 标签、多行 HTML 元素）
- * 2. 移除图片徽章 ![alt](url) — react-native-marked 不渲染图片，会显示 !alt
- * 3. 清理连续空行
+ * 预处理 Markdown（逐行处理，避免多行正则误删正文）：
+ * 1. 跳过以 HTML 标签开头的行（徽章 <a><img> 块等）
+ * 2. 将行内图片 ![alt](url) 转为纯文字 alt（避免显示 !alt 前缀）
+ * 3. 去除行内残留 HTML 标签
+ * 4. 清理多余空行
  */
 function preprocessMarkdown(md: string): string {
-  return md
-    // 移除完整的多行 HTML 块（如 <a>...<img>...</a>）
-    .replace(/<[a-zA-Z][^>]*>[\s\S]*?<\/[a-zA-Z]+>/g, '')
-    // 移除自闭合 HTML 标签（<img ... />）
-    .replace(/<[a-zA-Z][^>]*\/>/g, '')
-    // 移除剩余的单行 HTML 开闭标签
-    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
-    // 移除图片 markdown ![alt](url)，彻底去掉（含徽章）
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    // 清理连续 3 个以上空行 → 保留最多 2 个
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let skipUntilBlank = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // 空行：重置 HTML 块跳过状态
+    if (trimmed === '') {
+      skipUntilBlank = false;
+      out.push('');
+      continue;
+    }
+
+    // 如果当前正处于 HTML 块跳过模式，继续跳过
+    if (skipUntilBlank) continue;
+
+    // 以 HTML 标签开头的行 → 进入跳过模式
+    if (/^<[a-zA-Z]/.test(trimmed)) {
+      skipUntilBlank = true;
+      continue;
+    }
+
+    // 普通行：处理行内元素
+    const processed = line
+      // ![alt](url) → 仅保留 alt 文字（如果 alt 为空则删除整个 token）
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => alt.trim() || '')
+      // 去除行内 HTML 标签
+      .replace(/<[^>]+>/g, '');
+
+    out.push(processed);
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /** 安全渲染 Markdown，兼容 Web/Native */
