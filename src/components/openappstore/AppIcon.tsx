@@ -1,3 +1,4 @@
+import React from 'react';
 /**
  * 应用图标组件
  *

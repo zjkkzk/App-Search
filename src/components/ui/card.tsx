@@ -1,3 +1,4 @@
+import React from 'react';
 import { Text, TextClassContext } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 import { View } from 'react-native';

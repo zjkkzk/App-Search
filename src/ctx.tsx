@@ -1,3 +1,4 @@
+import React from 'react';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { Session } from '@supabase/supabase-js';
