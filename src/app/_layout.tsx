@@ -8,6 +8,29 @@ import { View, Text, Platform } from 'react-native';
 import { DownloadProvider } from '@/ctx/DownloadContext';
 import "../global.css";
 
+// ─── Web 端错误诊断（临时调试用）─────────────────────────────────────
+// 将 JS 错误注入到页面 DOM，即使 React 完全崩溃也能看到错误信息
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
+  const inject = (msg: string, bg: string, top: string) => {
+    try {
+      const el = document.createElement('div');
+      el.style.cssText = `position:fixed;${top};left:0;right:0;padding:14px 16px;
+        background:${bg};color:#fff;z-index:999999;font-size:13px;
+        word-break:break-all;font-family:monospace;line-height:1.4;
+        white-space:pre-wrap;max-height:40vh;overflow-y:auto`;
+      el.textContent = msg;
+      document.body?.appendChild(el);
+    } catch { /* 若 body 还未准备好则忽略 */ }
+  };
+  (window as any).onerror = (msg: any, src: any, line: any, col: any, err: any) => {
+    inject(`[JS Error]\n${msg}\n${src}:${line}:${col}\n${err?.stack || ''}`, '#c0392b', 'top:0');
+    return false;
+  };
+  window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+    inject(`[Promise Rejection]\n${e.reason?.stack || e.reason || '(unknown)'}`, '#e67e22', 'top:0');
+  });
+}
+
 // Native 端保留 GestureHandlerRootView；Web 端用 plain View 避免潜在兼容性问题
 const RootWrapper = Platform.OS === 'web'
   ? ({ children }: { children: React.ReactNode }) => <View style={{ flex: 1 }}>{children}</View>
