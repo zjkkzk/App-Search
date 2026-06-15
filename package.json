@@ -75,6 +75,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@babel/plugin-transform-react-jsx": "^7.29.7",
     "@biomejs/biome": "2.4.5",
     "@expo/metro-runtime": "55.0.11",
     "@types/react": "~19.2.14",
