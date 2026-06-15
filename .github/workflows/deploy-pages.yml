@@ -53,6 +53,12 @@ jobs:
         env:
           CI: true
 
+      # GitHub Pages 是纯静态托管，不支持服务端路由重写。
+      # 将 index.html 复制为 404.html，使任意路径刷新/直接访问时
+      # 都由 SPA 自身接管路由，而不是返回 GitHub 的默认 404 页面。
+      - name: Add 404.html for SPA routing fallback
+        run: cp dist/index.html dist/404.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
