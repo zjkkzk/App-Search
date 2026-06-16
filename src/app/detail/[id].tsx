@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { fetchRepoDetail, fetchReleases, fetchReadme, getPlatformFromFilename, filterInstallAssets } from '@/lib/github';
+import { fetchRepoDetail, fetchReleases, fetchReadme, getPlatformFromFilename, filterInstallAssets, filterVerificationAssets } from '@/lib/github';
 import { addFavorite, removeFavorite, isFavorite, addDownloadRecord } from '@/lib/database';
 import type { AppItem, GitHubRelease } from '@/types';
 import PlatformTag from '@/components/openappstore/PlatformTag';
@@ -25,12 +25,11 @@ function formatCount(n: number) {
 // ─── 自定义 Renderer：解决 shields.io SVG 徽章不显示的根本问题 ────────────────
 class AppRenderer extends Renderer {
   constructor() {
-    super(); // 必须调用，初始化基类 Slugger
+    super();
   }
 
   // 覆盖 image：使用 expo-image 替代 react-native Image，shields.io 强制 PNG 格式
   image(uri: string, alt?: string, _style?: ImageStyle): ReactNode {
-    const key = this.getKey(); // 使用基类 Slugger 生成唯一 key，避免重复 key 渲染异常
     let src = uri;
     // shields.io / badge 相关 URL 默认返回 SVG，react-native 无法渲染 → 强制转 PNG
     if (/shields\.io|badge\.svg|gitcode\.com.*badge|badgen\.net/i.test(src)) {
@@ -38,7 +37,7 @@ class AppRenderer extends Renderer {
     }
     return (
       <Image
-        key={key}
+        key={this.getKey()}
         source={{ uri: src }}
         style={{ height: 20, minWidth: 20, maxWidth: '100%' as unknown as number }}
         contentFit="contain"
@@ -109,13 +108,21 @@ function preprocessMarkdown(md: string): string {
   s = s.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_, c) => `\n### ${c.replace(/<[^>]+>/g, '').trim()}\n`);
   s = s.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_, c) => `\n#### ${c.replace(/<[^>]+>/g, '').trim()}\n`);
 
-  // 6. 段落/换行标签 → 换行；列表结构：</li> 先转换确保内容后有换行，再处理容器标签，最后 <li> 转 "- "
-  s = s.replace(/<\/p>/gi, '\n');
-  s = s.replace(/<br\s*\/?>/gi, '\n');
+  // 5b. HTML 表格 → Markdown 表格
+  s = convertHtmlTableToMarkdown(s);
+
+  // 5c. HTML 列表标签 → Markdown 列表
+  // 先处理 </li> 确保列表项内容正确
   s = s.replace(/<\/li>/gi, '\n');
+  // <ul> 和 <ol> 转换为换行（保留列表结构）
   s = s.replace(/<\/?ul[^>]*>/gi, '\n');
   s = s.replace(/<\/?ol[^>]*>/gi, '\n');
+  // <li> 转换为列表项标记（使用 - 作为通用标记）
   s = s.replace(/<li[^>]*>/gi, '- ');
+
+  // 6. 段落/换行标签 → 空行/换行
+  s = s.replace(/<\/p>/gi, '\n');
+  s = s.replace(/<br\s*\/?>/gi, '\n');
 
   // 7. 剥除剩余所有 HTML 标签（保留文字）
   s = s.replace(/<[^>]+>/g, '');
@@ -127,35 +134,87 @@ function preprocessMarkdown(md: string): string {
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** 将 Markdown 表格转换为带样式的 HTML 表格（仅用于 Web 平台） */
+function convertHtmlTableToMarkdown(text: string): string {
+  return text.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (_, tableContent) => {
+    const rows: string[][] = [];
+    
+    const rowMatches = tableContent.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
+    
+    for (const row of rowMatches) {
+      const cells: string[] = [];
+      const cellMatches = row.match(/<(th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi) || [];
+      
+      for (const cell of cellMatches) {
+        const content = cell.replace(/<(th|td)[^>]*>/gi, '').replace(/<\/(?:th|td)>/gi, '').trim();
+        cells.push(content);
+      }
+      
+      if (cells.length > 0) {
+        rows.push(cells);
+      }
+    }
+    
+    if (rows.length === 0) {
+      return '';
+    }
+    
+    const headerRow = rows[0];
+    const separatorRow = headerRow.map(() => '---');
+    const bodyRows = rows.slice(1);
+    
+    const markdownRows: string[] = [];
+    markdownRows.push('| ' + headerRow.join(' | ') + ' |');
+    markdownRows.push('| ' + separatorRow.join(' | ') + ' |');
+    
+    for (const bodyRow of bodyRows) {
+      const paddedRow = headerRow.map((_, i) => bodyRow[i] || '');
+      markdownRows.push('| ' + paddedRow.join(' | ') + ' |');
+    }
+    
+    return '\n' + markdownRows.join('\n') + '\n';
+  });
+}
+
 function convertMarkdownTableToHtml(text: string): string {
-  // 匹配：header行 + 分隔行（|---|...）+ 若干数据行
-  return text.replace(
-    /^(\|.+\|\s*\n)(^\|[\s\-:|]+\|\s*\n)((?:^\|.+\|\s*\n?)+)/gm,
-    (_, headerLine, _sep, dataBlock) => {
-      const parseRow = (line: string) =>
-        line.split('|').slice(1, -1).map((c) => c.trim());
-
-      const headers = parseRow(headerLine);
-      const rows = dataBlock
-        .trim()
-        .split('\n')
-        .filter((l: string) => l.trim().startsWith('|'))
-        .map(parseRow);
-
-      const thStyle =
-        'padding:6px 10px;text-align:left;background:#F8F9FA;font-size:13px;font-weight:600;color:#333;border:1px solid #E5E7EB;white-space:nowrap';
-      const tdStyle =
-        'padding:6px 10px;font-size:13px;color:#555;border:1px solid #E5E7EB;vertical-align:top';
-
-      const thead = `<tr>${headers.map((h) => `<th style="${thStyle}">${h}</th>`).join('')}</tr>`;
-      const tbody = rows
-        .map((row: string[]) => `<tr>${row.map((cell) => `<td style="${tdStyle}">${cell}</td>`).join('')}</tr>`)
-        .join('');
-
-      return `<div style="overflow-x:auto;margin:10px 0"><table style="border-collapse:collapse;width:100%"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>\n`;
-    },
-  );
+  const tableRegex = /^\|.*\|$\n^\|[-|]+\|$\n((?:^\|.*\|$\n?)+)/gm;
+  
+  return text.replace(tableRegex, (match) => {
+    const lines = match.trim().split('\n');
+    if (lines.length < 2) return match;
+    
+    const headerLine = lines[0];
+    const separatorLine = lines[1];
+    const bodyLines = lines.slice(2);
+    
+    const parseRow = (row: string): string[] => {
+      const cells = row.split('|').filter(cell => cell.trim() !== '');
+      return cells.map(cell => cell.trim());
+    };
+    
+    const headers = parseRow(headerLine);
+    
+    let html = '<table style="border-collapse:collapse;width:100%;margin:12px 0;font-size:13px;">';
+    html += '<thead><tr>';
+    headers.forEach(header => {
+      html += `<th style="border:1px solid #E5E7EB;padding:8px;text-align:left;font-weight:600;background:#F7F9FC;">${header}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    
+    bodyLines.forEach(line => {
+      if (line.trim()) {
+        const cells = parseRow(line);
+        html += '<tr>';
+        cells.forEach((cell, idx) => {
+          const isHeader = idx === 0 && bodyLines.indexOf(line) === 0 && !separatorLine.includes(':');
+          html += `<td style="border:1px solid #E5E7EB;padding:8px;${isHeader ? 'font-weight:600;' : ''}">${cell}</td>`;
+        });
+        html += '</tr>';
+      }
+    });
+    
+    html += '</tbody></table>';
+    return html;
+  });
 }
 
 /** Markdown 渲染区，兼容 Native（react-native-marked + 自定义 Renderer）和 Web（dangerouslySetInnerHTML） */
@@ -168,7 +227,7 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
 
   // ── Web 平台 ──────────────────────────────────────────────────────────────
   if (Platform.OS === 'web') {
-    // 步骤1：保护图片语法，避免后续 HTML 转义破坏 URL
+    // 先把 ![alt](url) 转成 <img>，然后再做 HTML 转义（避免 img 标签被转义）
     const rawImages: string[] = [];
     let withImgPlaceholders = cleaned.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
       const idx = rawImages.length;
@@ -176,19 +235,10 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
       return `%%IMG${idx}%%`;
     });
 
-    // 步骤2：在转义前先转换 Markdown 表格 → HTML（转义后 | 变成 &#124; 会破坏表格）
-    const rawTables: string[] = [];
-    withImgPlaceholders = convertMarkdownTableToHtml(withImgPlaceholders).replace(
-      /<div style="overflow-x:auto[\s\S]*?<\/div>\n?/g,
-      (match) => {
-        const idx = rawTables.length;
-        rawTables.push(match);
-        return `%%TABLE${idx}%%`;
-      },
-    );
+    // 先处理表格（需要在换行转换之前处理）
+    let html = convertMarkdownTableToHtml(withImgPlaceholders);
 
-    // 步骤3：转义普通文本中的 HTML 特殊字符，再做 Markdown → HTML 转换
-    let html = withImgPlaceholders
+    html = html
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/^#{3}\s+(.+)$/gm, '<h3 style="font-size:14px;font-weight:700;margin:12px 0 4px;color:#111">$1</h3>')
       .replace(/^#{2}\s+(.+)$/gm, '<h2 style="font-size:16px;font-weight:700;margin:14px 0 6px;color:#111">$1</h2>')
@@ -198,14 +248,11 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
       .replace(/`([^`]+)`/g, '<code style="background:#F4F4F4;border-radius:3px;padding:1px 5px;font-size:12px">$1</code>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#1677FF;text-decoration:none">$1</a>')
       .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #E5E7EB;margin:12px 0"/>')
-      .replace(/^- (.+)$/gm, '<li style="margin:2px 0;font-size:14px;color:#555">$1</li>')
-      .replace(/(<li[^>]*>[\s\S]*?<\/li>(\n|$))+/g, (m) => `<ul style="padding-left:18px;margin:6px 0">${m}</ul>`)
       .replace(/\n\n/g, '</p><p style="margin:0 0 8px;color:#555;font-size:14px;line-height:22px">')
       .replace(/\n/g, '<br/>');
 
-    // 步骤4：还原图片和表格占位符
+    // 还原图片占位符
     rawImages.forEach((img, i) => { html = html.replace(`%%IMG${i}%%`, img); });
-    rawTables.forEach((tbl, i) => { html = html.replace(`%%TABLE${i}%%`, tbl); });
 
     return (
       <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
@@ -250,11 +297,6 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
 export default function DetailScreen() {
   const { owner, repo } = useLocalSearchParams<{ owner: string; repo: string }>();
   const router = useRouter();
-  // 直接打开详情页时导航栈为空，canGoBack() 为 false → 回首页而非 back()
-  const goBack = () => {
-    if (router.canGoBack()) router.back();
-    else router.replace('/(tabs)');
-  };
   const [app, setApp] = useState<AppItem | null>(null);
   const [releases, setReleases] = useState<GitHubRelease[]>([]);
   const [readme, setReadme] = useState('');
@@ -277,10 +319,11 @@ export default function DetailScreen() {
         const installRels = rels.map((r) => ({
           ...r,
           assets: filterInstallAssets(r.assets),
+          verification_assets: filterVerificationAssets(r.assets),
         })).filter((r) => r.assets.length > 0);
         setReleases(installRels);
         if (installRels.length > 0) setExpandedRelease(installRels[0].id);
-        setReadme(md); // 不限制字数，完整渲染 README
+        setReadme(md.slice(0, 20000)); // 限制长度避免渲染卡顿
         const f = await isFavorite(detail.id).catch(() => false);
         setFavored(f);
       } catch (e: any) {
@@ -297,6 +340,22 @@ export default function DetailScreen() {
     else { await addFavorite(app); setFavored(true); }
   };
 
+  const handleDownload = async (rel: GitHubRelease, asset: GitHubRelease['assets'][number]) => {
+    if (!app) return;
+    await addDownloadRecord({
+      app_id: app.id,
+      app_name: app.name,
+      owner: app.owner,
+      repo: app.repo,
+      avatar_url: app.avatar_url,
+      version: rel.tag_name,
+      download_time: new Date().toISOString(),
+      file_size: asset.size,
+      html_url: asset.browser_download_url,
+    }).catch(() => {});
+    Linking.openURL(asset.browser_download_url);
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8', alignItems: 'center', justifyContent: 'center' }} edges={['top']}>
@@ -308,7 +367,7 @@ export default function DetailScreen() {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8', alignItems: 'center', justifyContent: 'center', padding: 24 }} edges={['top']}>
         <Text style={{ color: '#d32f2f', fontSize: 16, textAlign: 'center', marginBottom: 20 }}>{error || '加载失败'}</Text>
-        <Pressable onPress={goBack} style={{ backgroundColor: '#1677FF', paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 }}>
+        <Pressable onPress={() => router.back()} style={{ backgroundColor: '#1677FF', paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 }}>
           <Text style={{ color: '#fff', fontWeight: '600' }}>返回</Text>
         </Pressable>
       </SafeAreaView>
@@ -320,7 +379,7 @@ export default function DetailScreen() {
       {/* Header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
         backgroundColor: '#fff', borderBottomWidth: 0.5, borderBottomColor: '#EBEBEB' }}>
-        <Pressable onPress={goBack} hitSlop={12} style={{ marginRight: 12 }}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={{ marginRight: 12 }}>
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </Pressable>
         <Text style={{ flex: 1, fontSize: 17, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>{app.name}</Text>
@@ -370,6 +429,26 @@ export default function DetailScreen() {
           )}
         </View>
 
+        {/* 可信信息卡片 */}
+        <View style={{ backgroundColor: '#fff', borderRadius: 18, padding: 16, gap: 12,
+          boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }] }}>
+          <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A' }}>开源与安全信息</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            <TrustBadge icon="document-text-outline" label={app.license_name || '未声明协议'} color={app.license_name ? '#1677FF' : '#FAAD14'} />
+            <TrustBadge icon="time-outline" label={`更新 ${app.updated_at?.slice(0, 10) || '-'}`} color="#52C41A" />
+            <TrustBadge icon="alert-circle-outline" label={app.archived ? '仓库已归档' : `${app.open_issues_count} 个 Issue`} color={app.archived ? '#F5222D' : '#8C8C8C'} />
+          </View>
+          {!app.license_name || app.archived ? (
+            <Text style={{ fontSize: 12, color: '#FA8C16', lineHeight: 18 }}>
+              建议下载前确认项目协议、维护状态和 Release 说明；未声明协议或已归档项目存在使用与安全风险。
+            </Text>
+          ) : (
+            <Text style={{ fontSize: 12, color: '#888', lineHeight: 18 }}>
+              安装包来自项目 GitHub Release，请优先选择与你设备匹配的平台文件。
+            </Text>
+          )}
+        </View>
+
         {/* 版本下载卡片 */}
         {releases.length > 0 && (
           <View style={{ backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden',
@@ -394,6 +473,7 @@ export default function DetailScreen() {
                     <View style={{ borderTopWidth: 0.5, borderTopColor: '#F5F5F5' }}>
                       {rel.assets.map((asset, ai) => {
                         const platform = getPlatformFromFilename(asset.name);
+                        const verificationAssets = rel.verification_assets || [];
                         return (
                           <View key={asset.name} style={{ flexDirection: 'row', alignItems: 'center',
                             paddingHorizontal: 16, paddingVertical: 12, gap: 10,
@@ -418,25 +498,16 @@ export default function DetailScreen() {
                             </View>
                             {/* 下载按钮 */}
                             <Pressable
-                              onPress={async () => {
-                                // 记录下载历史，再打开链接（闭环修复）
-                                addDownloadRecord({
-                                  app_id: app.id,
-                                  app_name: app.name,
-                                  owner: owner ?? '',
-                                  repo: repo ?? '',
-                                  avatar_url: app.avatar_url,
-                                  version: rel.tag_name,
-                                  download_time: new Date().toISOString(),
-                                  file_size: asset.size,
-                                  html_url: asset.browser_download_url,
-                                }).catch(() => {});
-                                Linking.openURL(asset.browser_download_url);
-                              }}
+                              onPress={() => handleDownload(rel, asset)}
                               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
                                 borderWidth: 1.5, borderColor: '#1677FF' }}>
                               <Text style={{ fontSize: 13, fontWeight: '600', color: '#1677FF' }}>下载</Text>
                             </Pressable>
+                            {verificationAssets.length > 0 && ai === 0 ? (
+                              <Text style={{ position: 'absolute', left: 16, bottom: 2, fontSize: 10, color: '#52C41A' }}>
+                                含校验/签名文件
+                              </Text>
+                            ) : null}
                           </View>
                         );
                       })}
@@ -457,32 +528,6 @@ export default function DetailScreen() {
           <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>在 GitHub 查看</Text>
         </Pressable>
 
-        {/* 可信信息卡：License / 更新时间 / 安全提示 */}
-        <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 10,
-          boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }] }}>
-          <Text style={{ fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 }}>项目信息</Text>
-          {[
-            { icon: 'document-text-outline' as const, color: '#1677FF', label: '许可证', value: app.license || '未知' },
-            { icon: 'time-outline' as const, color: '#00B96B', label: '最近更新', value: app.updated_at ? app.updated_at.slice(0, 10).replace(/-/g, '/') : '-' },
-            { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本', value: releases[0]?.tag_name || '-' },
-            { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间', value: releases[0]?.published_at ? releases[0].published_at.slice(0, 10).replace(/-/g, '/') : '-' },
-          ].map((row) => (
-            <View key={row.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Ionicons name={row.icon} size={16} color={row.color} />
-              <Text style={{ fontSize: 13, color: '#888', width: 64 }}>{row.label}</Text>
-              <Text style={{ fontSize: 13, color: '#333', fontWeight: '500', flex: 1 }}>{row.value}</Text>
-            </View>
-          ))}
-          {/* 安全提示 */}
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 4,
-            backgroundColor: '#FFFBE6', borderRadius: 8, padding: 10 }}>
-            <Ionicons name="warning-outline" size={15} color="#FA8C16" style={{ marginTop: 1 }} />
-            <Text style={{ fontSize: 12, color: '#8D6E0A', flex: 1, lineHeight: 18 }}>
-              安装包来自 GitHub Release，请确认来源可信后再安装，建议仅安装您熟悉的开源项目。
-            </Text>
-          </View>
-        </View>
-
         {/* README Markdown 渲染 */}
         {readme ? <MarkdownSection content={readme} owner={owner ?? ''} repo={repo ?? ''} /> : null}
       </ScrollView>
@@ -499,4 +544,14 @@ function getPlatformColor(platform: string): string {
     Linux: '#E6B800',
   };
   return map[platform] || '#666';
+}
+
+function TrustBadge({ icon, label, color }: { icon: React.ComponentProps<typeof Ionicons>['name']; label: string; color: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6,
+      borderRadius: 14, backgroundColor: `${color}14`, borderWidth: 1, borderColor: `${color}33` }}>
+      <Ionicons name={icon} size={13} color={color} />
+      <Text style={{ fontSize: 12, color, fontWeight: '600' }} numberOfLines={1}>{label}</Text>
+    </View>
+  );
 }

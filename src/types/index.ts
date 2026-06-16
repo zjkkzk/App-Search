@@ -30,6 +30,12 @@ export interface GitHubRelease {
     download_count: number;
     browser_download_url: string;
   }>;
+  verification_assets?: Array<{
+    name: string;
+    size: number;
+    download_count: number;
+    browser_download_url: string;
+  }>;
 }
 
 export interface AppItem {
@@ -47,9 +53,14 @@ export interface AppItem {
   platforms: string[];
   latest_version: string | null;
   latest_release_date: string | null;
+  license_name: string | null;
+  archived: boolean;
+  open_issues_count: number;
+  has_installable_assets: boolean;
+  install_platforms: string[];
+  total_downloads: number;
   html_url: string;
   updated_at: string;
-  license: string | null;
 }
 
 export interface DownloadRecord {

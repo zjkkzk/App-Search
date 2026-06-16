@@ -78,10 +78,19 @@ export default function AppCard({ app }: AppCardProps) {
             {app.platforms.slice(0, 2).map((p) => (
               <PlatformTag key={p} platform={p} />
             ))}
+            {app.latest_version ? (
+              <Text style={{ fontSize: 11, color: '#1677FF', fontWeight: '600' }}>{app.latest_version}</Text>
+            ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 2 }}>
               <Ionicons name="star" size={11} color="#FAAD14" />
               <Text style={{ fontSize: 11, color: '#999999' }}>{app.stars.toLocaleString()}</Text>
             </View>
+            {app.total_downloads > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <Ionicons name="download-outline" size={11} color="#999999" />
+                <Text style={{ fontSize: 11, color: '#999999' }}>{app.total_downloads.toLocaleString()}</Text>
+              </View>
+            ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <Ionicons name="git-branch-outline" size={11} color="#999999" />
               <Text style={{ fontSize: 11, color: '#999999' }}>{app.forks.toLocaleString()}</Text>

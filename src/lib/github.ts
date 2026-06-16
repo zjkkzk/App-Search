@@ -29,12 +29,19 @@ async function extractErrorMessage(error: any): Promise<string> {
 
 export async function searchRepos(
   q: string,
-  options: { sort?: string; order?: string; page?: number; per_page?: number } = {}
+  options: { sort?: string; order?: string; page?: number; per_page?: number; installableOnly?: boolean } = {}
 ): Promise<{ items: AppItem[]; total_count: number }> {
+  const normalizedQuery = normalizeStoreQuery(q)
   const { data, error } = await supabase.functions.invoke('github-proxy', {
     body: {
       action: 'search',
-      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.per_page || 30 },
+      params: {
+        q: normalizedQuery,
+        sort: options.sort || 'stars',
+        order: options.order || 'desc',
+        page: options.page || 1,
+        per_page: options.per_page || 30,
+      },
       token: cachedToken,
     },
   })
@@ -43,6 +50,10 @@ export async function searchRepos(
     throw new Error(msg)
   }
   const items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
+  if (options.installableOnly) {
+    const enriched = await enrichInstallableApps(items)
+    return { items: enriched, total_count: data.data?.total_count || 0 }
+  }
   return { items, total_count: data.data?.total_count || 0 }
 }
 
@@ -59,6 +70,38 @@ export async function fetchRepoDetail(owner: string, repo: string): Promise<AppI
     throw new Error(msg)
   }
   return mapRepoToApp(data.data)
+}
+
+async function enrichInstallableApps(items: AppItem[]): Promise<AppItem[]> {
+  const candidates = items.filter((item) => !item.archived).slice(0, 12)
+  const settled = await Promise.allSettled(candidates.map(async (item) => {
+    const releases = await fetchReleases(item.owner, item.repo).catch(() => [] as GitHubRelease[])
+    const installReleases = releases.map((release) => ({
+      ...release,
+      assets: filterInstallAssets(release.assets),
+    })).filter((release) => release.assets.length > 0)
+
+    if (installReleases.length === 0) return null
+
+    const firstRelease = installReleases[0]
+    const allAssets = installReleases.flatMap((release) => release.assets)
+    const platforms = Array.from(new Set(allAssets.map((asset) => getPlatformFromFilename(asset.name)).filter(Boolean))) as string[]
+    const totalDownloads = allAssets.reduce((sum, asset) => sum + (asset.download_count || 0), 0)
+
+    return {
+      ...item,
+      has_installable_assets: true,
+      install_platforms: platforms,
+      platforms: platforms.length > 0 ? platforms : item.platforms,
+      latest_version: firstRelease.tag_name,
+      latest_release_date: firstRelease.published_at,
+      total_downloads: totalDownloads,
+    }
+  }))
+
+  return settled
+    .map((result) => result.status === 'fulfilled' ? result.value : null)
+    .filter((item): item is AppItem => Boolean(item))
 }
 
 export async function fetchReleases(owner: string, repo: string, page = 1): Promise<GitHubRelease[]> {
@@ -173,10 +216,23 @@ function mapRepoToApp(item: any): AppItem {
     platforms,
     latest_version: null,
     latest_release_date: null,
+    license_name: item.license?.spdx_id || item.license?.name || null,
+    archived: Boolean(item.archived),
+    open_issues_count: item.open_issues_count || 0,
+    has_installable_assets: false,
+    install_platforms: [],
+    total_downloads: 0,
     html_url: item.html_url,
     updated_at: item.updated_at || item.pushed_at,
-    license: item.license?.name || item.license?.spdx_id || null,
   }
+}
+
+function normalizeStoreQuery(q: string): string {
+  const safeguards = ['archived:false', 'fork:false']
+  const next = safeguards.reduce((query, token) => (
+    query.includes(token) ? query : `${query} ${token}`
+  ), q.trim())
+  return next || 'app archived:false fork:false'
 }
 
 function detectPlatforms(topics: string[]): string[] {
@@ -206,26 +262,25 @@ export function getPlatformFromFilename(filename: string): string | null {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.apk')) return 'Android'
   if (lower.endsWith('.ipa')) return 'iOS'
-  if (lower.endsWith('.dmg')) return 'macOS'
+  if (lower.endsWith('.dmg') || lower.endsWith('.pkg')) return 'macOS'
   if (lower.endsWith('.exe') || lower.endsWith('.msi')) return 'Windows'
-  if (lower.endsWith('.deb') || lower.endsWith('.rpm') || lower.endsWith('.appimage')) return 'Linux'
+  if (lower.endsWith('.deb') || lower.endsWith('.rpm') || lower.endsWith('.appimage') || lower.endsWith('.flatpak') || lower.endsWith('.snap')) return 'Linux'
   return null
 }
 
-export async function checkReposHaveInstallable(items: AppItem[]): Promise<Record<string, boolean>> {
-  if (!items.length) return {}
-  const repos = items.map((i) => ({ owner: i.owner, repo: i.repo }))
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: { action: 'check_installable_batch', params: { repos }, token: cachedToken },
-  })
-  if (error) return {}
-  return (data?.data || {}) as Record<string, boolean>
-}
-
 export function filterInstallAssets(assets: GitHubRelease['assets']) {
-  const sigExts = ['.asc', '.sig', '.sha256', '.sha512', '.md5', '.txt']
   return assets.filter((a) => {
     const lower = a.name.toLowerCase()
-    return !sigExts.some((ext) => lower.endsWith(ext))
+    return INSTALL_EXTS.some((ext) => lower.endsWith(ext))
   })
 }
+
+export function filterVerificationAssets(assets: GitHubRelease['assets']) {
+  return assets.filter((a) => {
+    const lower = a.name.toLowerCase()
+    return VERIFY_EXTS.some((ext) => lower.endsWith(ext))
+  })
+}
+
+const INSTALL_EXTS = ['.apk', '.ipa', '.dmg', '.pkg', '.exe', '.msi', '.deb', '.rpm', '.appimage', '.flatpak', '.snap']
+const VERIFY_EXTS = ['.asc', '.sig', '.sha256', '.sha512', '.md5']
