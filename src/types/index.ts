@@ -49,6 +49,7 @@ export interface AppItem {
   latest_release_date: string | null;
   html_url: string;
   updated_at: string;
+  license: string | null;
 }
 
 export interface DownloadRecord {
