@@ -19,6 +19,8 @@ export interface AppEvent {
   event_type: EventType
   app_id?: number
   app_name?: string
+  owner?: string           // GitHub owner (username / org)
+  repo?: string            // GitHub repository name
   keyword?: string
   platform?: string        // 'android' | 'ios' | 'windows' | ...
   created_at: number       // unix ms
@@ -196,8 +198,8 @@ export async function uploadPendingEvents(supabaseFunctionsInvoke: (name: string
     const rows = pending.map((e) => ({
       app_id:     e.app_id ?? 0,
       app_name:   e.app_name ?? '',
-      owner:      '',
-      repo:       '',
+      owner:      e.owner ?? '',
+      repo:       e.repo ?? '',
       avatar_url: '',
       event_type: e.event_type,
       keyword:    e.keyword ?? null,
