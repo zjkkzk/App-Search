@@ -70,7 +70,7 @@ export default function AppCard({ app }: AppCardProps) {
             </Text>
           ) : null}
 
-          {/* 语言、平台标签、Star/Fork */}
+          {/* 语言、平台标签、Star/Fork / 版本 */}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
             {app.language ? (
               <Text style={{ fontSize: 11, color: '#999999' }}>{app.language}</Text>
@@ -78,23 +78,26 @@ export default function AppCard({ app }: AppCardProps) {
             {app.platforms.slice(0, 2).map((p) => (
               <PlatformTag key={p} platform={p} />
             ))}
-            {app.latest_version ? (
-              <Text style={{ fontSize: 11, color: '#1677FF', fontWeight: '600' }}>{app.latest_version}</Text>
-            ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 2 }}>
               <Ionicons name="star" size={11} color="#FAAD14" />
               <Text style={{ fontSize: 11, color: '#999999' }}>{app.stars.toLocaleString()}</Text>
             </View>
-            {app.total_downloads > 0 ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                <Ionicons name="download-outline" size={11} color="#999999" />
-                <Text style={{ fontSize: 11, color: '#999999' }}>{app.total_downloads.toLocaleString()}</Text>
-              </View>
-            ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <Ionicons name="git-branch-outline" size={11} color="#999999" />
               <Text style={{ fontSize: 11, color: '#999999' }}>{app.forks.toLocaleString()}</Text>
             </View>
+            {app.latest_version ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <Ionicons name="pricetag-outline" size={11} color="#52C41A" />
+                <Text style={{ fontSize: 11, color: '#52C41A', fontWeight: '500' }}>{app.latest_version}</Text>
+              </View>
+            ) : null}
+            {app.total_downloads > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <Ionicons name="download-outline" size={11} color="#1677FF" />
+                <Text style={{ fontSize: 11, color: '#1677FF' }}>{app.total_downloads.toLocaleString()}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
       </View>
