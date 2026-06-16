@@ -8,10 +8,9 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { supabase } from '@/client/supabase';
 import { uploadPendingEvents } from '@/lib/events';
-import LetterAvatar from '@/components/openappstore/LetterAvatar';
+import AppIcon from '@/components/openappstore/AppIcon';
 
 type RankType = 'hot' | 'download' | 'favorite' | 'keywords';
 type Period = 'week' | 'month' | 'all';
@@ -121,15 +120,17 @@ export default function RankingScreen() {
   const renderItem = ({ item, index }: { item: RankItem; index: number }) => {
     const rank = item.rank_position;
     const medal = rank <= 3 ? MEDAL_COLORS[rank - 1] : null;
-    const hasValidIcon = !!(item.avatar_url || item.owner);
-    const iconUri = item.avatar_url || (item.owner ? `https://github.com/${item.owner}.png` : '');
     const displayName = item.app_name || item.repo || `App #${item.app_id}`;
     const subLine = item.owner && item.repo ? `${item.owner}/${item.repo}` : item.owner || item.repo || '';
     const scoreColor = rankType === 'download' ? '#1677FF' : rankType === 'favorite' ? '#FF4D88' : '#FF4D4F';
+    const canNavigate = !!(item.owner && item.repo);
     return (
       <Pressable
         android_ripple={{ color: '#F5F5F5' }}
-        onPress={() => item.owner && item.repo ? router.push(`/detail/${item.owner}/${item.repo}` as any) : undefined}
+        onPress={() => {
+          if (!canNavigate) return;
+          router.push({ pathname: '/detail/[id]', params: { id: String(item.app_id), owner: item.owner, repo: item.repo } } as any);
+        }}
         style={{
           flexDirection: 'row', alignItems: 'center',
           paddingHorizontal: 14, paddingVertical: 10,
@@ -145,18 +146,10 @@ export default function RankingScreen() {
             : <Text style={{ fontSize: 14, fontWeight: '700', color: '#CCC' }}>{rank}</Text>}
         </View>
 
-        {/* 应用图标 */}
-        {hasValidIcon ? (
-          <Image
-            source={{ uri: iconUri }}
-            style={{ width: 42, height: 42, borderRadius: 10, backgroundColor: '#F0F0F0', marginRight: 12 }}
-            contentFit="cover"
-          />
-        ) : (
-          <View style={{ marginRight: 12 }}>
-            <LetterAvatar name={displayName} size={42} />
-          </View>
-        )}
+        {/* 应用图标：统一使用 AppIcon（内置降级到 LetterAvatar）*/}
+        <View style={{ marginRight: 12 }}>
+          <AppIcon owner={item.owner} url={item.avatar_url} name={displayName} size={42} />
+        </View>
 
         {/* 名称 + 统计 */}
         <View style={{ flex: 1, gap: 3 }}>
