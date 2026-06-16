@@ -6,16 +6,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { searchRepos, enrichAppsInBackground } from '@/lib/github';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
 import { addAppEvent } from '@/lib/events';
+import { supabase } from '@/client/supabase';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
-
-const HOT = ['VLC', 'Telegram', 'OBS', 'Signal', 'Termux', 'Bitwarden', 'Kodi', 'Neovim'];
 
 export default function SearchTab() {
   const inputRef = useRef<TextInput>(null);
   const textRef = useRef('');
   const [hasText, setHasText] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
+  const [hotWords, setHotWords] = useState<string[]>([]);
   const [results, setResults] = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -25,7 +25,21 @@ export default function SearchTab() {
     try { setHistory(await getSearchHistory()); } catch { /* ignore */ }
   }, []);
 
-  useFocusEffect(useCallback(() => { loadHistory(); }, [loadHistory]));
+  const loadHotWords = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('search_hot_words')
+        .select('keyword')
+        .order('count', { ascending: false })
+        .limit(20);
+      if (Array.isArray(data)) setHotWords(data.map((r: any) => r.keyword));
+    } catch { /* 静默失败 */ }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    loadHistory();
+    loadHotWords();
+  }, [loadHistory, loadHotWords]));
 
   const performSearch = async (kw: string) => {
     const k = kw.trim();
@@ -104,13 +118,17 @@ export default function SearchTab() {
               <Text style={{ fontWeight: '700', fontSize: 15 }}>热门搜索</Text>
               <Ionicons name="flame" size={14} color="#FF4D00" />
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {HOT.map((h) => (
-                <Pressable key={h} onPress={() => performSearch(h)} style={tagStyle}>
-                  <Text style={{ fontSize: 13, color: '#333' }}>{h}</Text>
-                </Pressable>
-              ))}
-            </View>
+            {hotWords.length === 0 ? (
+              <Text style={{ fontSize: 13, color: '#BBB' }}>暂无热搜数据</Text>
+            ) : (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {hotWords.map((h) => (
+                  <Pressable key={h} onPress={() => performSearch(h)} style={tagStyle}>
+                    <Text style={{ fontSize: 13, color: '#333' }}>{h}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
           </View>
         </ScrollView>
       ) : loading ? (
