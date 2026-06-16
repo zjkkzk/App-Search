@@ -34,8 +34,7 @@ export async function searchRepos(
   const { data, error } = await supabase.functions.invoke('github-proxy', {
     body: {
       action: 'search',
-      // 多取一些候选，供 installableOnly 过滤后仍有足够数量
-      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.installableOnly ? 30 : (options.per_page || 30) },
+      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.per_page || 30 },
       token: cachedToken,
     },
   })
@@ -43,54 +42,46 @@ export async function searchRepos(
     const msg = await extractErrorMessage(error)
     throw new Error(msg)
   }
-  let items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
-
-  // 批量校验安装包，过滤掉无安装包的仓库并填充版本/下载量/平台
-  if (options.installableOnly && items.length > 0) {
-    items = await enrichWithInstallable(items)
-  }
-
-  // 按原始 per_page 截取
-  const limit = options.per_page || 20
-  return { items: items.slice(0, limit), total_count: data.data?.total_count || 0 }
+  const items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
+  return { items, total_count: data.data?.total_count || 0 }
 }
 
-/** 批量校验安装包，填充 AppItem 中的版本、平台、下载量字段，过滤无安装包的项目
- *  安全策略：校验失败、返回格式异常、或过滤后为空 → 全部降级返回原始列表，避免页面白屏 */
-async function enrichWithInstallable(items: AppItem[]): Promise<AppItem[]> {
+/**
+ * 后台静默增强：批量查询安装包信息，填充版本/下载量/平台字段
+ * 不过滤结果，不阻塞首屏，失败时静默忽略
+ */
+export async function enrichAppsInBackground(
+  items: AppItem[],
+  onUpdate: (enriched: AppItem[]) => void
+): Promise<void> {
+  if (items.length === 0) return
   try {
     const repos = items.map((a) => ({ owner: a.owner, repo: a.repo }))
     const { data, error } = await supabase.functions.invoke('github-proxy', {
       body: { action: 'check_installable_batch', params: { repos }, token: cachedToken },
     })
-    // 接口报错或返回格式不是数组 → 降级
-    if (error || !Array.isArray(data?.data)) return items
+    if (error || !Array.isArray(data?.data)) return
 
     const resultMap = new Map<string, any>()
     for (const r of data.data) {
       if (r?.key) resultMap.set(r.key, r)
     }
 
-    const enriched = (items
-      .map((app): AppItem | null => {
-        const r = resultMap.get(`${app.owner}/${app.repo}`)
-        if (!r?.ok) return null
-        const mergedPlatforms = [...new Set([...app.platforms, ...(r.platforms || [])])]
-        return {
-          ...app,
-          has_installable_assets: true,
-          latest_version: r.latest_version ?? app.latest_version,
-          latest_release_date: r.latest_release_date ?? app.latest_release_date,
-          total_downloads: r.total_downloads ?? 0,
-          platforms: mergedPlatforms,
-        }
-      })
-      .filter((a) => a !== null)) as AppItem[]
-
-    // 关键回退：过滤后为空（全部 ok:false，通常是 API 限流或 check 未部署）→ 返回原始列表
-    return enriched.length > 0 ? enriched : items
+    const enriched = items.map((app): AppItem => {
+      const r = resultMap.get(`${app.owner}/${app.repo}`)
+      if (!r?.ok) return app
+      return {
+        ...app,
+        has_installable_assets: true,
+        latest_version: r.latest_version ?? app.latest_version,
+        latest_release_date: r.latest_release_date ?? app.latest_release_date,
+        total_downloads: r.total_downloads ?? 0,
+        platforms: [...new Set([...app.platforms, ...(r.platforms || [])])],
+      }
+    })
+    onUpdate(enriched)
   } catch {
-    return items // 降级：网络/超时时不过滤
+    // 静默失败，不影响已展示的列表
   }
 }
 
