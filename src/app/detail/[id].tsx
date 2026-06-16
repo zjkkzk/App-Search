@@ -26,6 +26,7 @@ function formatCount(n: number) {
 class AppRenderer extends Renderer {
   // 覆盖 image：使用 expo-image 替代 react-native Image，shields.io 强制 PNG 格式
   image(uri: string, alt?: string, _style?: ImageStyle): ReactNode {
+    const key = this.getKey(); // 使用基类 Slugger 生成唯一 key，避免重复 key 渲染异常
     let src = uri;
     // shields.io / badge 相关 URL 默认返回 SVG，react-native 无法渲染 → 强制转 PNG
     if (/shields\.io|badge\.svg|gitcode\.com.*badge|badgen\.net/i.test(src)) {
@@ -33,7 +34,7 @@ class AppRenderer extends Renderer {
     }
     return (
       <Image
-        key={uri}
+        key={key}
         source={{ uri: src }}
         style={{ height: 20, minWidth: 20, maxWidth: '100%' as unknown as number }}
         contentFit="contain"
