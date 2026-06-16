@@ -18,14 +18,14 @@ const PLATFORMS = [
 ] as const;
 
 const CATEGORIES = [
-  { key: '全部',     term: 'topic:android-app OR topic:ios-app OR topic:electron' },
-  { key: '开发工具', term: 'topic:cli OR topic:terminal OR topic:developer-tools' },
-  { key: '效率工具', term: 'topic:productivity OR topic:todo' },
-  { key: '媒体',     term: 'topic:music-player OR topic:video-player OR topic:media' },
+  { key: '全部',     term: 'app release' },
+  { key: '开发工具', term: 'topic:developer-tools' },
+  { key: '效率工具', term: 'topic:productivity' },
+  { key: '媒体',     term: 'topic:media' },
   { key: '游戏',     term: 'topic:game' },
-  { key: '安全',     term: 'topic:security OR topic:password-manager' },
-  { key: '社交',     term: 'topic:social OR topic:chat OR topic:messaging' },
-  { key: '系统工具', term: 'topic:system OR topic:utility' },
+  { key: '安全',     term: 'topic:security' },
+  { key: '社交',     term: 'topic:social' },
+  { key: '系统工具', term: 'topic:utility' },
 ];
 
 const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
@@ -35,7 +35,7 @@ const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
 ];
 
 function buildQuery(platform: string, category: string): string {
-  const cat = CATEGORIES.find((c) => c.key === category)?.term ?? 'topic:android-app OR topic:ios-app';
+  const cat = CATEGORIES.find((c) => c.key === category)?.term ?? 'app release';
   const base = `${cat} stars:>100 archived:false`;
   if (platform === '全平台') return base;
   // 平台过滤用 topic: 格式，GitHub 搜索命中率高
