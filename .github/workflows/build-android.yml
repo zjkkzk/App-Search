@@ -56,7 +56,7 @@ jobs:
         env:
           CI: true
 
-      - name: Apply arm64-v8a only ABI filter
+      - name: Force arm64-v8a only (strip all other ABIs)
         run: |
           python3 << 'PYEOF'
           import re
@@ -65,36 +65,61 @@ jobs:
           with open(path, 'r') as f:
               content = f.read()
 
-          changes = []
+          original = content
 
-          # 1. Add ndk.abiFilters in defaultConfig (filters NDK builds + prebuilt .so from AARs)
-          if "ndk {" not in content:
+          # ── 1. 强制替换 ndk { abiFilters ... } 块（不管已有什么内容）──────────
+          # 匹配 ndk { ... } 整块（单行或多行）并替换为只保留 arm64-v8a
+          content = re.sub(
+              r'ndk\s*\{[^}]*\}',
+              'ndk { abiFilters "arm64-v8a" }',
+              content
+          )
+          # 若原文件没有 ndk 块，则在 defaultConfig { 后插入
+          if 'ndk {' not in content:
               content = content.replace(
                   'defaultConfig {',
-                  'defaultConfig {\n        ndk { abiFilters "arm64-v8a" }'
+                  'defaultConfig {\n        ndk { abiFilters "arm64-v8a" }',
+                  1
               )
-              changes.append("ndk.abiFilters in defaultConfig")
 
-          # 2. Add packagingOptions to strip non-arm64 .so files at packaging stage
-          if "exclude 'lib/" not in content:
-              packaging = """
-              packagingOptions {
-                  jniLibs { useLegacyPackaging = true }
-                  exclude 'lib/armeabi-v7a/**'
-                  exclude 'lib/x86/**'
-                  exclude 'lib/x86_64/**'
-              }"""
-              content = content.replace('android {', 'android {' + packaging)
-              changes.append("packagingOptions exclusions")
+          # ── 2. 强制替换 / 插入 splits 块（最可靠的 ABI 分割方式）────────────
+          splits_block = '''    splits {
+              abi {
+                  enable true
+                  reset()
+                  include "arm64-v8a"
+                  universalApk false
+              }
+          }'''
+          if re.search(r'splits\s*\{', content):
+              content = re.sub(r'splits\s*\{.*?\}(\s*\})', splits_block + r'\1', content, flags=re.DOTALL)
+          else:
+              # 插入到 android { 块末尾（最后一个 } 之前）
+              content = re.sub(r'(android\s*\{)', r'\1\n' + splits_block, content, count=1)
+
+          # ── 3. 强制替换 / 插入 packagingOptions（删除非 arm64 .so）───────────
+          packaging_block = '''    packagingOptions {
+              jniLibs { useLegacyPackaging = true }
+              excludes += [
+                  "lib/armeabi-v7a/**",
+                  "lib/x86/**",
+                  "lib/x86_64/**"
+              ]
+          }'''
+          if re.search(r'packagingOptions\s*\{', content):
+              content = re.sub(r'packagingOptions\s*\{.*?\}', packaging_block, content, flags=re.DOTALL)
+          else:
+              content = re.sub(r'(android\s*\{)', r'\1\n' + packaging_block, content, count=1)
 
           with open(path, 'w') as f:
               f.write(content)
 
-          print(f"Applied: {', '.join(changes)}")
-          print("\nVerification:")
-          for line in content.split('\n'):
-              if any(kw in line for kw in ['abiFilter', 'ndk', 'exclude lib/', 'packagingOptions']):
-                  print(f"  {line.strip()}")
+          # 验证输出
+          print("=== ABI filter verification ===")
+          for i, line in enumerate(content.split('\n'), 1):
+              if any(kw in line for kw in ['abiFilter', 'ndk {', 'splits', 'include "arm64', 'universalApk', 'exclude', 'packagingOptions']):
+                  print(f"  L{i}: {line.strip()}")
+          print("=== Done ===")
           PYEOF
 
       - name: Generate release keystore
