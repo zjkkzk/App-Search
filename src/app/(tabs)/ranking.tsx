@@ -12,7 +12,7 @@ import { supabase } from '@/client/supabase';
 import { uploadPendingEvents } from '@/lib/events';
 import AppIcon from '@/components/openappstore/AppIcon';
 
-type RankType = 'hot' | 'download' | 'favorite' | 'keywords';
+type RankType = 'hot' | 'download' | 'favorite';
 type Period = 'week' | 'month' | 'all';
 
 interface RankItem {
@@ -28,16 +28,11 @@ interface RankItem {
   rank_position: number;
 }
 
-interface HotWord {
-  keyword: string;
-  count: number;
-}
 
 const RANK_TABS: { key: RankType; label: string; icon: string; color: string }[] = [
   { key: 'hot',      label: '热门榜',  icon: 'flame',    color: '#FF4D4F' },
   { key: 'download', label: '下载榜',  icon: 'download', color: '#1677FF' },
   { key: 'favorite', label: '收藏榜',  icon: 'heart',    color: '#FF4D88' },
-  { key: 'keywords', label: '搜索热词', icon: 'search',  color: '#7C3AED' },
 ];
 
 const PERIOD_TABS: { key: Period; label: string }[] = [
@@ -53,7 +48,6 @@ export default function RankingScreen() {
   const [rankType, setRankType] = useState<RankType>('hot');
   const [period, setPeriod] = useState<Period>('week');
   const [items, setItems] = useState<RankItem[]>([]);
-  const [hotWords, setHotWords] = useState<HotWord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
@@ -61,35 +55,23 @@ export default function RankingScreen() {
   const loadRankings = useCallback(async (type: RankType, p: Period) => {
     setLoading(true);
     try {
-      if (type === 'keywords') {
-        const { data } = await supabase
-          .from('search_hot_words')
-          .select('keyword, count')
-          .order('count', { ascending: false })
-          .limit(50);
-        setHotWords(Array.isArray(data) ? (data as HotWord[]) : []);
-        setItems([]);
-      } else {
-        const { data, error } = await supabase
-          .from('app_rankings')
-          .select('app_id, app_name, owner, repo, avatar_url, score, download_count, favorite_count, view_count, rank_position, updated_at')
-          .eq('rank_type', type)
-          .eq('period', p)
-          .order('rank_position', { ascending: true })
-          .limit(50);
-        if (error) throw error;
-        // 过滤掉 app_id=0 或名称/owner 均为空的无效记录
-        const valid = Array.isArray(data) ? data.filter((r: any) => r.app_id > 0 || r.app_name || r.owner) : [];
-        setItems(valid);
-        setHotWords([]);
-        if (data && data.length > 0) {
-          const ts = new Date((data[0] as any).updated_at);
-          setLastUpdated(`更新于 ${ts.toLocaleDateString('zh-CN')} ${ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`);
-        }
+      const { data, error } = await supabase
+        .from('app_rankings')
+        .select('app_id, app_name, owner, repo, avatar_url, score, download_count, favorite_count, view_count, rank_position, updated_at')
+        .eq('rank_type', type)
+        .eq('period', p)
+        .order('rank_position', { ascending: true })
+        .limit(50);
+      if (error) throw error;
+      // 过滤掉 app_id=0 或名称/owner 均为空的无效记录
+      const valid = Array.isArray(data) ? data.filter((r: any) => r.app_id > 0 || r.app_name || r.owner) : [];
+      setItems(valid);
+      if (data && data.length > 0) {
+        const ts = new Date((data[0] as any).updated_at);
+        setLastUpdated(`更新于 ${ts.toLocaleDateString('zh-CN')} ${ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`);
       }
     } catch {
       setItems([]);
-      setHotWords([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -185,55 +167,7 @@ export default function RankingScreen() {
     );
   };
 
-  /** 搜索热词面板 */
-  const renderKeywords = () => (
-    <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-      {hotWords.length === 0 ? (
-        <View style={{ alignItems: 'center', paddingTop: 60, gap: 10 }}>
-          <Ionicons name="search-outline" size={48} color="#DDD" />
-          <Text style={{ color: '#AAA', fontSize: 15 }}>暂无热搜数据</Text>
-          <Text style={{ color: '#CCC', fontSize: 13, textAlign: 'center' }}>使用搜索功能后，热词将自动汇总显示</Text>
-        </View>
-      ) : (
-        <>
-          <View style={{ backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
-            {hotWords.slice(0, 10).map((w, i) => (
-              <Pressable
-                key={w.keyword}
-                android_ripple={{ color: '#F0F0F0' }}
-                onPress={() => router.push({ pathname: '/(tabs)/search', params: { q: w.keyword } } as any)}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: i < 9 ? 0.5 : 0, borderBottomColor: '#F0F0F0' }}
-              >
-                <View style={{ width: 28, alignItems: 'center' }}>
-                  {i < 3
-                    ? <Ionicons name="flame" size={18} color={(['#FF4D4F', '#FF7A45', '#FFA940'] as const)[i]} />
-                    : <Text style={{ fontSize: 14, color: '#BBB', fontWeight: '600' }}>{i + 1}</Text>}
-                </View>
-                <Text style={{ flex: 1, marginLeft: 10, fontSize: 15, color: '#1A1A1A', fontWeight: i < 3 ? '600' : '400' }}>{w.keyword}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                  <Text style={{ fontSize: 12, color: '#AAA' }}>{w.count} 次</Text>
-                  <Ionicons name="chevron-forward" size={14} color="#CCC" />
-                </View>
-              </Pressable>
-            ))}
-          </View>
-          {hotWords.length > 10 && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {hotWords.slice(10).map((w) => (
-                <Pressable
-                  key={w.keyword}
-                  onPress={() => router.push({ pathname: '/(tabs)/search', params: { q: w.keyword } } as any)}
-                  style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#fff', borderRadius: 20, borderWidth: 0.5, borderColor: '#E8E8E8' }}
-                >
-                  <Text style={{ fontSize: 13, color: '#555' }}>{w.keyword}</Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
-        </>
-      )}
-    </ScrollView>
-  );
+  /** 搜索热词面板 — 已移除，热词统一在搜索页展示 */
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8' }} edges={['top']}>
@@ -268,9 +202,8 @@ export default function RankingScreen() {
           ))}
         </ScrollView>
 
-        {/* 周期 Tabs（热词榜不显示） */}
-        {rankType !== 'keywords' && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginTop: 10, marginBottom: 4 }}>
+        {/* 周期 Tabs */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginTop: 10, marginBottom: 4 }}>
             <View style={{ flexDirection: 'row', backgroundColor: '#E8E8E8', borderRadius: 18, padding: 3 }}>
               {PERIOD_TABS.map((t) => (
                 <Pressable
@@ -289,7 +222,6 @@ export default function RankingScreen() {
               <Text style={{ fontSize: 11, color: '#BBB', marginLeft: 'auto' }}>{lastUpdated}</Text>
             )}
           </View>
-        )}
       </View>
 
       {/* 内容区 */}
@@ -297,8 +229,6 @@ export default function RankingScreen() {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color="#1677FF" size="large" />
         </View>
-      ) : rankType === 'keywords' ? (
-        renderKeywords()
       ) : items.length === 0 ? (
         <ScrollView contentContainerStyle={{ flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, paddingVertical: 40 }}>
           <Ionicons name="trophy-outline" size={60} color="#E0E0E0" />
