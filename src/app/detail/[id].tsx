@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { fetchRepoDetail, fetchReleases, fetchReadme, getPlatformFromFilename, filterInstallAssets } from '@/lib/github';
-import { addFavorite, removeFavorite, isFavorite } from '@/lib/database';
+import { addFavorite, removeFavorite, isFavorite, addDownloadRecord } from '@/lib/database';
 import type { AppItem, GitHubRelease } from '@/types';
 import PlatformTag from '@/components/openappstore/PlatformTag';
 import Marked, { Renderer } from 'react-native-marked';
@@ -418,7 +418,21 @@ export default function DetailScreen() {
                             </View>
                             {/* 下载按钮 */}
                             <Pressable
-                              onPress={() => Linking.openURL(asset.browser_download_url)}
+                              onPress={async () => {
+                                // 记录下载历史，再打开链接（闭环修复）
+                                addDownloadRecord({
+                                  app_id: app.id,
+                                  app_name: app.name,
+                                  owner: owner ?? '',
+                                  repo: repo ?? '',
+                                  avatar_url: app.avatar_url,
+                                  version: rel.tag_name,
+                                  download_time: new Date().toISOString(),
+                                  file_size: asset.size,
+                                  html_url: asset.browser_download_url,
+                                }).catch(() => {});
+                                Linking.openURL(asset.browser_download_url);
+                              }}
                               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
                                 borderWidth: 1.5, borderColor: '#1677FF' }}>
                               <Text style={{ fontSize: 13, fontWeight: '600', color: '#1677FF' }}>下载</Text>
@@ -442,6 +456,32 @@ export default function DetailScreen() {
           <Ionicons name="logo-github" size={20} color="#fff" />
           <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>在 GitHub 查看</Text>
         </Pressable>
+
+        {/* 可信信息卡：License / 更新时间 / 安全提示 */}
+        <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 10,
+          boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }] }}>
+          <Text style={{ fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 }}>项目信息</Text>
+          {[
+            { icon: 'document-text-outline' as const, color: '#1677FF', label: '许可证', value: app.license || '未知' },
+            { icon: 'time-outline' as const, color: '#00B96B', label: '最近更新', value: app.updated_at ? app.updated_at.slice(0, 10).replace(/-/g, '/') : '-' },
+            { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本', value: releases[0]?.tag_name || '-' },
+            { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间', value: releases[0]?.published_at ? releases[0].published_at.slice(0, 10).replace(/-/g, '/') : '-' },
+          ].map((row) => (
+            <View key={row.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Ionicons name={row.icon} size={16} color={row.color} />
+              <Text style={{ fontSize: 13, color: '#888', width: 64 }}>{row.label}</Text>
+              <Text style={{ fontSize: 13, color: '#333', fontWeight: '500', flex: 1 }}>{row.value}</Text>
+            </View>
+          ))}
+          {/* 安全提示 */}
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 4,
+            backgroundColor: '#FFFBE6', borderRadius: 8, padding: 10 }}>
+            <Ionicons name="warning-outline" size={15} color="#FA8C16" style={{ marginTop: 1 }} />
+            <Text style={{ fontSize: 12, color: '#8D6E0A', flex: 1, lineHeight: 18 }}>
+              安装包来自 GitHub Release，请确认来源可信后再安装，建议仅安装您熟悉的开源项目。
+            </Text>
+          </View>
+        </View>
 
         {/* README Markdown 渲染 */}
         {readme ? <MarkdownSection content={readme} owner={owner ?? ''} repo={repo ?? ''} /> : null}
