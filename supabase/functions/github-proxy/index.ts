@@ -73,6 +73,33 @@ serve(async (req) => {
         url = `${GITHUB_API_BASE}/rate_limit`
         break
       }
+      case 'check_installable_batch': {
+        // 批量检查多个仓库的最新 Release 是否含可安装包，一次 Edge Function 调用并发检测
+        const repos = (params?.repos || []) as Array<{ owner: string; repo: string }>
+        const INSTALL_EXTS = ['.apk', '.ipa', '.dmg', '.exe', '.msi', '.deb', '.rpm', '.appimage', '.flatpak', '.snap']
+        const checks = await Promise.all(
+          repos.map(async ({ owner, repo }) => {
+            try {
+              const r = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/latest`, {
+                headers: githubHeaders(token),
+              })
+              if (!r.ok) return { key: `${owner}/${repo}`, ok: false }
+              const rel = await r.json()
+              const hasInstallable = (rel.assets || []).some((a: any) =>
+                INSTALL_EXTS.some((ext) => a.name.toLowerCase().endsWith(ext))
+              )
+              return { key: `${owner}/${repo}`, ok: hasInstallable }
+            } catch {
+              return { key: `${owner}/${repo}`, ok: false }
+            }
+          })
+        )
+        const map: Record<string, boolean> = {}
+        checks.forEach(({ key, ok }) => { map[key] = ok })
+        return new Response(JSON.stringify({ data: map }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
       default:
         throw new Error(`Unknown action: ${action}`)
     }
