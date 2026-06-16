@@ -57,12 +57,17 @@ Deno.serve(async (req: Request) => {
         const id = Number(row.app_id)
         if (!statsMap.has(id)) {
           statsMap.set(id, {
-            app_id: id, app_name: row.app_name, owner: row.owner,
-            repo: row.repo, avatar_url: row.avatar_url,
+            app_id: id, app_name: row.app_name ?? '', owner: row.owner ?? '',
+            repo: row.repo ?? '', avatar_url: row.avatar_url ?? '',
             download: 0, favorite: 0, view: 0,
           })
         }
         const s = statsMap.get(id)!
+        // 用任意非空值更新元数据（旧事件可能缺 owner/repo）
+        if (!s.owner && row.owner)           s.owner      = row.owner
+        if (!s.repo && row.repo)             s.repo       = row.repo
+        if (!s.avatar_url && row.avatar_url) s.avatar_url = row.avatar_url
+        if (!s.app_name && row.app_name)     s.app_name   = row.app_name
         if (row.event_type === 'download') s.download++
         else if (row.event_type === 'favorite') s.favorite++
         else if (row.event_type === 'view') s.view++
