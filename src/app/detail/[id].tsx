@@ -70,8 +70,8 @@ function preprocessMarkdown(md: string): string {
   // 2. GitHub Admonitions
   s = s.replace(/^>\s*\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT)\]\s*$/gm, (_, type) => {
     const labels: Record<string, string> = {
-      NOTE: '📝 注意', TIP: '💡 提示', WARNING: '⚠️ 警告',
-      CAUTION: '🚨 警告', IMPORTANT: '❗ 重要',
+      NOTE: 'ℹ️ 注意', TIP: '✅ 提示', WARNING: '⚠️ 警告',
+      CAUTION: '⚠️ 警告', IMPORTANT: '❗ 重要',
     };
     return `> **${labels[type] ?? type}**`;
   });
