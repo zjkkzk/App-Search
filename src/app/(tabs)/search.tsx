@@ -3,7 +3,7 @@ import { View, Text, TextInput, Pressable, FlatList, ScrollView, ActivityIndicat
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { searchRepos } from '@/lib/github';
+import { searchRepos, checkReposHaveInstallable } from '@/lib/github';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
@@ -34,7 +34,10 @@ export default function SearchTab() {
     try {
       setLoading(true); setSearched(true); setError('');
       const { items } = await searchRepos(`${k} stars:>10`, { sort: 'stars', per_page: 30 });
-      setResults(items);
+      // 批量验证：只保留真正有可安装包的项目
+      const installable = await checkReposHaveInstallable(items);
+      const filtered = items.filter((i) => installable[`${i.owner}/${i.repo}`]);
+      setResults(filtered);
     } catch (e: any) {
       setError(e?.message || '搜索失败'); setResults([]);
     } finally {
