@@ -22,43 +22,41 @@ function formatCount(n: number) {
 }
 
 /**
- * 预处理 Markdown（逐行处理，避免多行正则误删正文）：
- * 1. 跳过以 HTML 标签开头的行（徽章 <a><img> 块等）
- * 2. 将行内图片 ![alt](url) 转为纯文字 alt（避免显示 !alt 前缀）
+ * 预处理 Markdown：
+ * 1. 去除 YAML frontmatter（--- ... ---）
+ * 2. 逐行跳过以 HTML 标签开头的块（<a><img> 等），但保留 ![img](url) 让库原生渲染
  * 3. 去除行内残留 HTML 标签
  * 4. 清理多余空行
+ *
+ * ⚠️ 不再把 ![alt](url) 转为文字 —— react-native-marked v8 gfm:true 原生支持图片渲染
  */
 function preprocessMarkdown(md: string): string {
-  const lines = md.split('\n');
+  // 1. 去除 YAML frontmatter
+  let content = md.replace(/^---[\s\S]*?---\n?/, '');
+
+  const lines = content.split('\n');
   const out: string[] = [];
   let skipUntilBlank = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // 空行：重置 HTML 块跳过状态
     if (trimmed === '') {
       skipUntilBlank = false;
       out.push('');
       continue;
     }
 
-    // 如果当前正处于 HTML 块跳过模式，继续跳过
     if (skipUntilBlank) continue;
 
-    // 以 HTML 标签开头的行 → 进入跳过模式
+    // 以 HTML 标签开头的行（<a、<div、<img 等）→ 跳过整块
     if (/^<[a-zA-Z]/.test(trimmed)) {
       skipUntilBlank = true;
       continue;
     }
 
-    // 普通行：处理行内元素
-    const processed = line
-      // ![alt](url) → 仅保留 alt 文字（如果 alt 为空则删除整个 token）
-      .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => alt.trim() || '')
-      // 去除行内 HTML 标签
-      .replace(/<[^>]+>/g, '');
-
+    // 去除行内残留 HTML 标签，但保留 ![img](url) 完整
+    const processed = line.replace(/<[^>]+>/g, '');
     out.push(processed);
   }
 
@@ -66,22 +64,32 @@ function preprocessMarkdown(md: string): string {
 }
 
 /** 安全渲染 Markdown，兼容 Web/Native */
-function MarkdownSection({ content }: { content: string }) {
+function MarkdownSection({ content, owner, repo }: { content: string; owner: string; repo: string }) {
   if (!content) return null;
   const cleaned = preprocessMarkdown(content);
   if (!cleaned) return null;
 
-  // Web 平台：直接用 HTML 渲染
+  // baseUrl 用于解析相对路径图片（如 ./docs/screenshot.png）
+  const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
+
+  // Web 平台：用原始 markdown 内容注入 iframe-style div，支持图片徽章
   if (Platform.OS === 'web') {
     const html = cleaned
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      // 先处理图片（在转义之前）
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+        '<img src="$2" alt="$1" style="height:20px;vertical-align:middle;margin:2px 2px 2px 0;" />')
+      .replace(/&/g, '&amp;').replace(/</g, (m, offset, str) => {
+        // 保留已经生成的 <img 标签
+        return str.slice(offset, offset + 4) === '&amp' ? m : (str[offset - 1] === '"' ? m : '&lt;');
+      })
       .replace(/^### (.+)$/gm, '<h3 style="font-size:14px;font-weight:700;margin:12px 0 4px;color:#1A1A1A">$1</h3>')
       .replace(/^## (.+)$/gm, '<h2 style="font-size:16px;font-weight:700;margin:14px 0 6px;color:#1A1A1A">$1</h2>')
       .replace(/^# (.+)$/gm, '<h1 style="font-size:18px;font-weight:700;margin:16px 0 8px;color:#1A1A1A">$1</h1>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/`(.+?)`/g, '<code style="background:#F0F0F0;border-radius:3px;padding:1px 4px;font-size:12px">$1</code>')
-      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" style="color:#1677FF">$1</a>')
+      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" style="color:#1677FF">$1</a>')
+      .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid #E5E7EB;margin:12px 0"/>')
       .replace(/\n\n/g, '</p><p style="margin:0 0 8px;color:#555;font-size:14px;line-height:22px">')
       .replace(/\n/g, '<br/>');
     return (
@@ -98,12 +106,13 @@ function MarkdownSection({ content }: { content: string }) {
     );
   }
 
-  // Native 平台：使用 react-native-marked
+  // Native：react-native-marked v8，gfm:true，原生支持表格 + 图片 + HR
   return (
     <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
       <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 10 }}>README</Text>
       <Marked
         value={cleaned}
+        baseUrl={baseUrl}
         flatListProps={{ scrollEnabled: false }}
         styles={{
           text: { fontSize: 14, color: '#555', lineHeight: 22 },
@@ -113,6 +122,10 @@ function MarkdownSection({ content }: { content: string }) {
           code: { backgroundColor: '#F0F0F0', borderRadius: 4 },
           blockquote: { borderLeftWidth: 3, borderLeftColor: '#DDD', paddingLeft: 12, marginLeft: 0 },
           link: { color: '#1677FF' },
+          // 图片（徽章）：限制最大宽度，按比例缩放
+          image: { maxWidth: '100%' as unknown as number },
+          // HR 分隔线
+          hr: { backgroundColor: '#E5E7EB', height: 1, marginVertical: 12 },
         }}
       />
     </View>
@@ -311,7 +324,7 @@ export default function DetailScreen() {
         </Pressable>
 
         {/* README Markdown 渲染 */}
-        {readme ? <MarkdownSection content={readme} /> : null}
+        {readme ? <MarkdownSection content={readme} owner={owner ?? ''} repo={repo ?? ''} /> : null}
       </ScrollView>
     </SafeAreaView>
   );
