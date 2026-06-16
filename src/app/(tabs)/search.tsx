@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { searchRepos, enrichAppsInBackground } from '@/lib/github';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
+import { addAppEvent } from '@/lib/events';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 
@@ -31,6 +32,7 @@ export default function SearchTab() {
     if (!k) return;
     inputRef.current?.blur();
     try { addSearchHistory(k).then(loadHistory); } catch { /* ignore */ }
+    addAppEvent({ event_type: 'search', keyword: k }).catch(() => {});
     try {
       setLoading(true); setSearched(true); setError('');
       // 首屏直接展示搜索结果，不阻塞等待安装包校验
