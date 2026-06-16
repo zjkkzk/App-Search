@@ -3,7 +3,7 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { searchRepos } from '@/lib/github';
+import { searchRepos, enrichAppsInBackground } from '@/lib/github';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
@@ -71,10 +71,16 @@ export default function DiscoverTab() {
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
       const q = buildQuery(p, cat);
-      const { items } = await searchRepos(q, { page: pageNum, per_page: 20, sort: s, installableOnly: true });
+      // 首屏直接展示搜索结果，不阻塞等待安装包校验
+      const { items } = await searchRepos(q, { page: pageNum, per_page: 20, sort: s });
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
       setHasMore(items.length >= 20);
+      // 后台静默补充版本/下载量信息
+      enrichAppsInBackground(items, (enriched) => {
+        if (pageNum === 1) setApps(enriched);
+        else setApps((prev) => [...prev.slice(0, prev.length - items.length), ...enriched]);
+      });
     } catch { /* ignore */ } finally {
       setLoading(false);
       setRefreshing(false);
