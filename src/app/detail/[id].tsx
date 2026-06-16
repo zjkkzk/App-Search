@@ -109,16 +109,13 @@ function preprocessMarkdown(md: string): string {
   s = s.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_, c) => `\n### ${c.replace(/<[^>]+>/g, '').trim()}\n`);
   s = s.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_, c) => `\n#### ${c.replace(/<[^>]+>/g, '').trim()}\n`);
 
-  // 6. 段落/换行标签 → 空行/换行；列表标签 → Markdown 列表语法（保留结构）
+  // 6. 段落/换行标签 → 换行；列表结构：</li> 先转换确保内容后有换行，再处理容器标签，最后 <li> 转 "- "
   s = s.replace(/<\/p>/gi, '\n');
   s = s.replace(/<br\s*\/?>/gi, '\n');
-  // <ul> / <ol> 前后加空行，<li> 转为 "- " 列表项
-  s = s.replace(/<ul[^>]*>/gi, '\n');
-  s = s.replace(/<\/ul>/gi, '\n');
-  s = s.replace(/<ol[^>]*>/gi, '\n');
-  s = s.replace(/<\/ol>/gi, '\n');
-  s = s.replace(/<li[^>]*>/gi, '- ');
   s = s.replace(/<\/li>/gi, '\n');
+  s = s.replace(/<\/?ul[^>]*>/gi, '\n');
+  s = s.replace(/<\/?ol[^>]*>/gi, '\n');
+  s = s.replace(/<li[^>]*>/gi, '- ');
 
   // 7. 剥除剩余所有 HTML 标签（保留文字）
   s = s.replace(/<[^>]+>/g, '');
@@ -128,6 +125,37 @@ function preprocessMarkdown(md: string): string {
 
   // 9. 清理多余空行
   return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 将 Markdown 表格转换为带样式的 HTML 表格（仅用于 Web 平台） */
+function convertMarkdownTableToHtml(text: string): string {
+  // 匹配：header行 + 分隔行（|---|...）+ 若干数据行
+  return text.replace(
+    /^(\|.+\|\s*\n)(^\|[\s\-:|]+\|\s*\n)((?:^\|.+\|\s*\n?)+)/gm,
+    (_, headerLine, _sep, dataBlock) => {
+      const parseRow = (line: string) =>
+        line.split('|').slice(1, -1).map((c) => c.trim());
+
+      const headers = parseRow(headerLine);
+      const rows = dataBlock
+        .trim()
+        .split('\n')
+        .filter((l: string) => l.trim().startsWith('|'))
+        .map(parseRow);
+
+      const thStyle =
+        'padding:6px 10px;text-align:left;background:#F8F9FA;font-size:13px;font-weight:600;color:#333;border:1px solid #E5E7EB;white-space:nowrap';
+      const tdStyle =
+        'padding:6px 10px;font-size:13px;color:#555;border:1px solid #E5E7EB;vertical-align:top';
+
+      const thead = `<tr>${headers.map((h) => `<th style="${thStyle}">${h}</th>`).join('')}</tr>`;
+      const tbody = rows
+        .map((row: string[]) => `<tr>${row.map((cell) => `<td style="${tdStyle}">${cell}</td>`).join('')}</tr>`)
+        .join('');
+
+      return `<div style="overflow-x:auto;margin:10px 0"><table style="border-collapse:collapse;width:100%"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>\n`;
+    },
+  );
 }
 
 /** Markdown 渲染区，兼容 Native（react-native-marked + 自定义 Renderer）和 Web（dangerouslySetInnerHTML） */
@@ -140,7 +168,7 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
 
   // ── Web 平台 ──────────────────────────────────────────────────────────────
   if (Platform.OS === 'web') {
-    // 先把 ![alt](url) 转成 <img>，然后再做 HTML 转义（避免 img 标签被转义）
+    // 步骤1：保护图片语法，避免后续 HTML 转义破坏 URL
     const rawImages: string[] = [];
     let withImgPlaceholders = cleaned.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
       const idx = rawImages.length;
@@ -148,6 +176,18 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
       return `%%IMG${idx}%%`;
     });
 
+    // 步骤2：在转义前先转换 Markdown 表格 → HTML（转义后 | 变成 &#124; 会破坏表格）
+    const rawTables: string[] = [];
+    withImgPlaceholders = convertMarkdownTableToHtml(withImgPlaceholders).replace(
+      /<div style="overflow-x:auto[\s\S]*?<\/div>\n?/g,
+      (match) => {
+        const idx = rawTables.length;
+        rawTables.push(match);
+        return `%%TABLE${idx}%%`;
+      },
+    );
+
+    // 步骤3：转义普通文本中的 HTML 特殊字符，再做 Markdown → HTML 转换
     let html = withImgPlaceholders
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/^#{3}\s+(.+)$/gm, '<h3 style="font-size:14px;font-weight:700;margin:12px 0 4px;color:#111">$1</h3>')
@@ -158,11 +198,14 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
       .replace(/`([^`]+)`/g, '<code style="background:#F4F4F4;border-radius:3px;padding:1px 5px;font-size:12px">$1</code>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#1677FF;text-decoration:none">$1</a>')
       .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #E5E7EB;margin:12px 0"/>')
+      .replace(/^- (.+)$/gm, '<li style="margin:2px 0;font-size:14px;color:#555">$1</li>')
+      .replace(/(<li[^>]*>[\s\S]*?<\/li>(\n|$))+/g, (m) => `<ul style="padding-left:18px;margin:6px 0">${m}</ul>`)
       .replace(/\n\n/g, '</p><p style="margin:0 0 8px;color:#555;font-size:14px;line-height:22px">')
       .replace(/\n/g, '<br/>');
 
-    // 还原图片占位符
+    // 步骤4：还原图片和表格占位符
     rawImages.forEach((img, i) => { html = html.replace(`%%IMG${i}%%`, img); });
+    rawTables.forEach((tbl, i) => { html = html.replace(`%%TABLE${i}%%`, tbl); });
 
     return (
       <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
