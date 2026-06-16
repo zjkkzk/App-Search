@@ -2,7 +2,6 @@
  * 全局排行榜页
  * 数据来自 Supabase app_rankings 表（由 aggregate-rankings Edge Function 聚合）
  * 支持：热门榜 / 下载榜 / 收藏榜 / 搜索热词  ×  周榜 / 月榜 / 总榜
- * 底部附「我的常用」本地个人榜
  */
 import React, { useCallback, useState } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from 'react-native';
@@ -11,7 +10,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { supabase } from '@/client/supabase';
-import { uploadPendingEvents, getTopApps } from '@/lib/events';
+import { uploadPendingEvents } from '@/lib/events';
+import LetterAvatar from '@/components/openappstore/LetterAvatar';
 
 type RankType = 'hot' | 'download' | 'favorite' | 'keywords';
 type Period = 'week' | 'month' | 'all';
@@ -34,17 +34,11 @@ interface HotWord {
   count: number;
 }
 
-interface LocalApp {
-  app_id: number;
-  app_name: string;
-  count: number;
-}
-
 const RANK_TABS: { key: RankType; label: string; icon: string; color: string }[] = [
-  { key: 'hot',      label: '热门榜', icon: 'flame',         color: '#FF4D4F' },
-  { key: 'download', label: '下载榜', icon: 'download',      color: '#1677FF' },
-  { key: 'favorite', label: '收藏榜', icon: 'heart',         color: '#FF4D88' },
-  { key: 'keywords', label: '搜索热词', icon: 'search',      color: '#7C3AED' },
+  { key: 'hot',      label: '热门榜',  icon: 'flame',    color: '#FF4D4F' },
+  { key: 'download', label: '下载榜',  icon: 'download', color: '#1677FF' },
+  { key: 'favorite', label: '收藏榜',  icon: 'heart',    color: '#FF4D88' },
+  { key: 'keywords', label: '搜索热词', icon: 'search',  color: '#7C3AED' },
 ];
 
 const PERIOD_TABS: { key: Period; label: string }[] = [
@@ -61,17 +55,14 @@ export default function RankingScreen() {
   const [period, setPeriod] = useState<Period>('week');
   const [items, setItems] = useState<RankItem[]>([]);
   const [hotWords, setHotWords] = useState<HotWord[]>([]);
-  const [localApps, setLocalApps] = useState<LocalApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
-  const [aggregating, setAggregating] = useState(false);
 
   const loadRankings = useCallback(async (type: RankType, p: Period) => {
     setLoading(true);
     try {
       if (type === 'keywords') {
-        // 搜索热词：从 search_hot_words 表读取
         const { data } = await supabase
           .from('search_hot_words')
           .select('keyword, count')
@@ -104,53 +95,17 @@ export default function RankingScreen() {
     }
   }, []);
 
-  const loadLocalApps = useCallback(async () => {
-    try {
-      const [views, downloads] = await Promise.all([
-        getTopApps('view', 5),
-        getTopApps('download', 5),
-      ]);
-      // 合并：下载权重 × 3，查看权重 × 1
-      const map = new Map<number, LocalApp>();
-      for (const v of views) {
-        map.set(v.app_id, { app_id: v.app_id, app_name: v.app_name, count: v.count });
-      }
-      for (const d of downloads) {
-        const prev = map.get(d.app_id);
-        map.set(d.app_id, { app_id: d.app_id, app_name: d.app_name, count: (prev?.count ?? 0) + d.count * 3 });
-      }
-      setLocalApps(
-        Array.from(map.values())
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 5)
-      );
-    } catch { /* ignore */ }
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      loadLocalApps();
-      // 上报本地未发送的事件；如有新事件则自动触发聚合，免去手动点击
+      // 上报本地事件，然后无论是否有新事件都自动聚合一次，确保榜单始终最新
       uploadPendingEvents((name, opts) =>
         supabase.functions.invoke(name, { body: opts.body as Record<string, unknown> }).then(() => {})
-      ).then(async (uploaded) => {
-        if (uploaded > 0) {
-          try { await supabase.functions.invoke('aggregate-rankings', {}); } catch { /* ignore */ }
-          loadRankings(rankType, period);
-        }
-      }).catch(() => {});
-      loadRankings(rankType, period);
-    }, [loadRankings, loadLocalApps, rankType, period])
+      ).then(async () => {
+        try { await supabase.functions.invoke('aggregate-rankings', {}); } catch { /* ignore */ }
+        loadRankings(rankType, period);
+      }).catch(() => { loadRankings(rankType, period); });
+    }, [loadRankings, rankType, period])
   );
-
-  const handleAggregateNow = async () => {
-    setAggregating(true);
-    try {
-      await supabase.functions.invoke('aggregate-rankings', {});
-      await loadRankings(rankType, period);
-    } catch { /* ignore */ }
-    setAggregating(false);
-  };
 
   const handleTabChange = (type: RankType) => {
     setRankType(type);
@@ -164,29 +119,40 @@ export default function RankingScreen() {
   const renderItem = ({ item, index }: { item: RankItem; index: number }) => {
     const rank = item.rank_position;
     const medal = rank <= 3 ? MEDAL_COLORS[rank - 1] : null;
+    const hasValidIcon = !!(item.avatar_url || item.owner);
+    const iconUri = item.avatar_url || (item.owner ? `https://github.com/${item.owner}.png` : '');
+    const displayName = item.app_name || item.repo || `App #${item.app_id}`;
+    const subLine = item.owner && item.repo ? `${item.owner}/${item.repo}` : item.owner || item.repo || '';
     return (
       <Pressable
         android_ripple={{ color: '#F0F0F0' }}
-        onPress={() => router.push(`/detail/${item.owner}/${item.repo}` as any)}
+        onPress={() => item.owner && item.repo ? router.push(`/detail/${item.owner}/${item.repo}` as any) : undefined}
         style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff', borderBottomWidth: index < items.length - 1 ? 0.5 : 0, borderBottomColor: '#F0F0F0' }}
       >
+        {/* 排名 */}
         <View style={{ width: 32, alignItems: 'center' }}>
           {medal
             ? <Ionicons name="trophy" size={20} color={medal} />
             : <Text style={{ fontSize: 15, fontWeight: '600', color: '#AAA' }}>{rank}</Text>}
         </View>
-        <Image
-          source={{ uri: item.avatar_url || `https://github.com/${item.owner}.png` }}
-          style={{ width: 44, height: 44, borderRadius: 10, marginHorizontal: 12, backgroundColor: '#F5F5F5' }}
-          contentFit="cover"
-        />
+
+        {/* 图标：有有效 URL 则加载图片，否则字母头像 */}
+        {hasValidIcon ? (
+          <Image
+            source={{ uri: iconUri }}
+            style={{ width: 44, height: 44, borderRadius: 10, marginHorizontal: 12, backgroundColor: '#F5F5F5' }}
+            contentFit="cover"
+          />
+        ) : (
+          <View style={{ marginHorizontal: 12 }}>
+            <LetterAvatar name={displayName} size={44} />
+          </View>
+        )}
+
+        {/* 名称 + 统计 */}
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>
-            {item.app_name || item.repo}
-          </Text>
-          <Text style={{ fontSize: 12, color: '#888', marginTop: 2 }} numberOfLines={1}>
-            {item.owner}/{item.repo}
-          </Text>
+          <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>{displayName}</Text>
+          {!!subLine && <Text style={{ fontSize: 12, color: '#888', marginTop: 2 }} numberOfLines={1}>{subLine}</Text>}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
             {item.download_count > 0 && (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
@@ -208,6 +174,8 @@ export default function RankingScreen() {
             )}
           </View>
         </View>
+
+        {/* 热度分 */}
         <Text style={{ fontSize: 13, fontWeight: '700', color: rankType === 'hot' ? '#FF4D4F' : rankType === 'download' ? '#1677FF' : '#FF4D88' }}>
           {item.score > 999 ? `${(item.score / 1000).toFixed(1)}k` : item.score}
         </Text>
@@ -236,7 +204,7 @@ export default function RankingScreen() {
               >
                 <View style={{ width: 28, alignItems: 'center' }}>
                   {i < 3
-                    ? <Ionicons name="flame" size={18} color={['#FF4D4F', '#FF7A45', '#FFA940'][i]} />
+                    ? <Ionicons name="flame" size={18} color={(['#FF4D4F', '#FF7A45', '#FFA940'] as const)[i]} />
                     : <Text style={{ fontSize: 14, color: '#BBB', fontWeight: '600' }}>{i + 1}</Text>}
                 </View>
                 <Text style={{ flex: 1, marginLeft: 10, fontSize: 15, color: '#1A1A1A', fontWeight: i < 3 ? '600' : '400' }}>{w.keyword}</Text>
@@ -265,48 +233,11 @@ export default function RankingScreen() {
     </ScrollView>
   );
 
-  /** 我的常用（本地个人榜）*/
-  const renderLocalSection = () => {
-    if (localApps.length === 0) return null;
-    return (
-      <View style={{ marginHorizontal: 16, marginBottom: 16 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 6 }}>
-          <Ionicons name="person-circle-outline" size={16} color="#888" />
-          <Text style={{ fontSize: 13, fontWeight: '600', color: '#888' }}>我的常用</Text>
-        </View>
-        <View style={{ backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden' }}>
-          {localApps.map((app, i) => (
-            <View key={app.app_id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: i < localApps.length - 1 ? 0.5 : 0, borderBottomColor: '#F5F5F5' }}>
-              <Text style={{ width: 20, fontSize: 13, color: '#CCC', fontWeight: '600' }}>{i + 1}</Text>
-              <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={{ fontSize: 14, color: '#1A1A1A', fontWeight: '500' }} numberOfLines={1}>{app.app_name || `App #${app.app_id}`}</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                <Ionicons name="eye-outline" size={12} color="#AAA" />
-                <Text style={{ fontSize: 12, color: '#AAA' }}>{app.count}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8' }} edges={['top']}>
       {/* 标题栏 */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
+      <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
         <Text style={{ fontSize: 22, fontWeight: '700', color: '#1A1A1A' }}>排行榜</Text>
-        <Pressable
-          onPress={handleAggregateNow}
-          android_ripple={{ color: '#E8F0FF' }}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: '#EEF4FF', borderRadius: 20 }}
-        >
-          {aggregating
-            ? <ActivityIndicator size={13} color="#1677FF" />
-            : <Ionicons name="refresh-outline" size={14} color="#1677FF" />}
-          <Text style={{ fontSize: 12, color: '#1677FF' }}>刷新榜单</Text>
-        </Pressable>
       </View>
 
       {/* 榜单类型 Tabs */}
@@ -371,7 +302,7 @@ export default function RankingScreen() {
             {[
               { step: '1', icon: 'search-outline', color: '#1677FF', bg: '#EBF3FF', title: '搜索应用', desc: '在搜索页输入关键词，每次搜索都会计入统计' },
               { step: '2', icon: 'apps-outline',   color: '#FF8C00', bg: '#FFF7E6', title: '浏览 / 收藏 / 下载', desc: '进入详情页查看、点击收藏或下载安装包' },
-              { step: '3', icon: 'refresh-outline', color: '#52C41A', bg: '#F6FFED', title: '刷新榜单', desc: '点击右上角「刷新榜单」，系统聚合数据生成排行' },
+              { step: '3', icon: 'sync-outline',   color: '#52C41A', bg: '#F6FFED', title: '自动更新', desc: '每次打开榜单页，系统自动聚合最新数据' },
             ].map((item) => (
               <View key={item.step} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: '#fff', borderRadius: 14, padding: 14, boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }] } as any}>
                 <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: item.bg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -389,17 +320,7 @@ export default function RankingScreen() {
               </View>
             ))}
           </View>
-          <Pressable
-            onPress={handleAggregateNow}
-            android_ripple={{ color: '#E8F0FF' }}
-            style={{ marginTop: 24, paddingHorizontal: 32, paddingVertical: 12, backgroundColor: '#1677FF', borderRadius: 24, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-          >
-            {aggregating
-              ? <ActivityIndicator size={16} color="#fff" />
-              : <Ionicons name="refresh-outline" size={16} color="#fff" />}
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>立即生成榜单</Text>
-          </Pressable>
-          <Text style={{ fontSize: 11, color: '#CCC', marginTop: 12, textAlign: 'center' }}>
+          <Text style={{ fontSize: 11, color: '#CCC', marginTop: 20, textAlign: 'center' }}>
             榜单数据由所有用户共同贡献，匿名统计，不涉及个人隐私
           </Text>
         </ScrollView>
@@ -411,10 +332,8 @@ export default function RankingScreen() {
           contentInsetAdjustmentBehavior="automatic"
           refreshing={refreshing}
           onRefresh={() => { setRefreshing(true); loadRankings(rankType, period); }}
-          ListHeaderComponent={renderLocalSection}
-          style={{ marginHorizontal: 16, borderRadius: 16, overflow: 'hidden' }}
+          style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden' }}
           contentContainerStyle={{ paddingBottom: 32 }}
-          ListHeaderComponentStyle={{ backgroundColor: 'transparent' }}
         />
       )}
     </SafeAreaView>
