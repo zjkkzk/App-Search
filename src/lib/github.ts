@@ -1,7 +1,11 @@
-import { supabase } from '@/client/supabase'
 import type { AppItem, GitHubRelease } from '@/types'
 
 let cachedToken: string | null = null
+
+// 直接读取环境变量，避免依赖 supabase-js 客户端层
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
+const SUPABASE_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || ''
+const EDGE_FN_URL = `${SUPABASE_URL}/functions/v1/github-proxy`
 
 export async function setGitHubToken(token: string | null) {
   cachedToken = token
@@ -11,37 +15,43 @@ export async function getGitHubToken(): Promise<string | null> {
   return cachedToken
 }
 
-/** 从 supabase.functions.invoke 的 error 中提取可读错误信息 */
-async function extractErrorMessage(error: any): Promise<string> {
-  try {
-    const raw = await error?.context?.text?.()
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      // Edge Function 返回: { error, details } 或 { message }
-      if (parsed?.details) return String(parsed.details)
-      if (parsed?.error) return String(parsed.error)
-      if (parsed?.message) return String(parsed.message)
-      return raw
-    }
-  } catch { /* ignore parse errors */ }
-  return error?.message || '请求失败，请稍后重试'
+/**
+ * 用原生 fetch 直接调用 Edge Function，绕过 supabase-js FunctionsClient
+ * 避免 "Failed to send a request to the Edge Function" 错误
+ */
+async function callEdgeFunction(body: Record<string, unknown>): Promise<any> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    throw new Error('Supabase 环境变量未配置，请检查 .env 文件')
+  }
+  const res = await fetch(EDGE_FN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'apikey': SUPABASE_KEY,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let msg = `Edge Function 请求失败 (${res.status})`
+    try {
+      const json = await res.json()
+      msg = json?.details || json?.error || json?.message || msg
+    } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+  return res.json()
 }
 
 export async function searchRepos(
   q: string,
   options: { sort?: string; order?: string; page?: number; per_page?: number; installableOnly?: boolean } = {}
 ): Promise<{ items: AppItem[]; total_count: number }> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'search',
-      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.per_page || 30 },
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'search',
+    params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.per_page || 30 },
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   const items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
   return { items, total_count: data.data?.total_count || 0 }
 }
@@ -57,10 +67,12 @@ export async function enrichAppsInBackground(
   if (items.length === 0) return
   try {
     const repos = items.map((a) => ({ owner: a.owner, repo: a.repo }))
-    const { data, error } = await supabase.functions.invoke('github-proxy', {
-      body: { action: 'check_installable_batch', params: { repos }, token: cachedToken },
+    const data = await callEdgeFunction({
+      action: 'check_installable_batch',
+      params: { repos },
+      token: cachedToken,
     })
-    if (error || !Array.isArray(data?.data)) return
+    if (!Array.isArray(data?.data)) return
 
     const resultMap = new Map<string, any>()
     for (const r of data.data) {
@@ -86,32 +98,20 @@ export async function enrichAppsInBackground(
 }
 
 export async function fetchRepoDetail(owner: string, repo: string): Promise<AppItem> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'repo',
-      params: { owner, repo },
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'repo',
+    params: { owner, repo },
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   return mapRepoToApp(data.data)
 }
 
 export async function fetchReleases(owner: string, repo: string, page = 1): Promise<GitHubRelease[]> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'releases',
-      params: { owner, repo, page },
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'releases',
+    params: { owner, repo, page },
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   return (data.data || []).map((r: any) => ({
     id: r.id,
     tag_name: r.tag_name,
@@ -129,17 +129,11 @@ export async function fetchReleases(owner: string, repo: string, page = 1): Prom
 }
 
 export async function fetchReadme(owner: string, repo: string): Promise<string> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'readme',
-      params: { owner, repo },
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'readme',
+    params: { owner, repo },
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   // GitHub API 返回的 base64 中含 `\n`，必须先清除再 atob
   const raw = (data.data?.content || '').replace(/\s/g, '')
   if (!raw) return ''
@@ -158,17 +152,11 @@ export async function fetchReadme(owner: string, repo: string): Promise<string> 
 }
 
 export async function fetchContributors(owner: string, repo: string): Promise<Array<{ login: string; avatar_url: string; html_url: string }>> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'contributors',
-      params: { owner, repo },
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'contributors',
+    params: { owner, repo },
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   return (data.data || []).map((c: any) => ({
     login: c.login,
     avatar_url: c.avatar_url,
@@ -177,16 +165,10 @@ export async function fetchContributors(owner: string, repo: string): Promise<Ar
 }
 
 export async function fetchRateLimit(): Promise<{ remaining: number; limit: number; reset: number }> {
-  const { data, error } = await supabase.functions.invoke('github-proxy', {
-    body: {
-      action: 'rate_limit',
-      token: cachedToken,
-    },
+  const data = await callEdgeFunction({
+    action: 'rate_limit',
+    token: cachedToken,
   })
-  if (error) {
-    const msg = await extractErrorMessage(error)
-    throw new Error(msg)
-  }
   const core = data.data?.resources?.core || data.data?.rate || { remaining: 0, limit: 60, reset: 0 }
   return {
     remaining: core.remaining ?? 0,
