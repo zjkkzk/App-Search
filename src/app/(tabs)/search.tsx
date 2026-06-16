@@ -30,9 +30,25 @@ export default function SearchTab() {
       const { data } = await supabase
         .from('search_hot_words')
         .select('keyword')
-        .order('count', { ascending: false })
+        .order('search_count', { ascending: false })
         .limit(20);
-      if (Array.isArray(data)) setHotWords(data.map((r: any) => r.keyword));
+      if (Array.isArray(data) && data.length > 0) {
+        setHotWords(data.map((r: any) => r.keyword));
+        return;
+      }
+      // 表中暂无数据时，直接从 app_events 聚合
+      const { data: events } = await supabase
+        .from('app_events')
+        .select('keyword')
+        .eq('event_type', 'search')
+        .not('keyword', 'is', null)
+        .neq('keyword', '');
+      if (Array.isArray(events) && events.length > 0) {
+        const freq: Record<string, number> = {};
+        for (const e of events) { freq[e.keyword] = (freq[e.keyword] || 0) + 1; }
+        const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k]) => k);
+        setHotWords(sorted);
+      }
     } catch { /* 静默失败 */ }
   }, []);
 
