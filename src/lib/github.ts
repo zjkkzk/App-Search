@@ -29,12 +29,13 @@ async function extractErrorMessage(error: any): Promise<string> {
 
 export async function searchRepos(
   q: string,
-  options: { sort?: string; order?: string; page?: number; per_page?: number } = {}
+  options: { sort?: string; order?: string; page?: number; per_page?: number; installableOnly?: boolean } = {}
 ): Promise<{ items: AppItem[]; total_count: number }> {
   const { data, error } = await supabase.functions.invoke('github-proxy', {
     body: {
       action: 'search',
-      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.per_page || 30 },
+      // 多取一些候选，供 installableOnly 过滤后仍有足够数量
+      params: { q, sort: options.sort || 'stars', order: options.order || 'desc', page: options.page || 1, per_page: options.installableOnly ? 30 : (options.per_page || 30) },
       token: cachedToken,
     },
   })
@@ -42,8 +43,51 @@ export async function searchRepos(
     const msg = await extractErrorMessage(error)
     throw new Error(msg)
   }
-  const items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
-  return { items, total_count: data.data?.total_count || 0 }
+  let items = (data.data?.items || []).map((item: any) => mapRepoToApp(item))
+
+  // 批量校验安装包，过滤掉无安装包的仓库并填充版本/下载量/平台
+  if (options.installableOnly && items.length > 0) {
+    items = await enrichWithInstallable(items)
+  }
+
+  // 按原始 per_page 截取
+  const limit = options.per_page || 20
+  return { items: items.slice(0, limit), total_count: data.data?.total_count || 0 }
+}
+
+/** 批量校验安装包，填充 AppItem 中的版本、平台、下载量字段，过滤无安装包的项目 */
+async function enrichWithInstallable(items: AppItem[]): Promise<AppItem[]> {
+  try {
+    const repos = items.map((a) => ({ owner: a.owner, repo: a.repo }))
+    const { data, error } = await supabase.functions.invoke('github-proxy', {
+      body: { action: 'check_installable_batch', params: { repos }, token: cachedToken },
+    })
+    if (error || !Array.isArray(data?.data)) return items // 降级：直接返回原列表
+
+    const resultMap = new Map<string, any>()
+    for (const r of data.data) {
+      if (r?.key) resultMap.set(r.key, r)
+    }
+
+    return (items
+      .map((app): AppItem | null => {
+        const r = resultMap.get(`${app.owner}/${app.repo}`)
+        if (!r?.ok) return null // 无安装包，过滤掉
+        // 合并平台信息（topics + release assets）
+        const mergedPlatforms = [...new Set([...app.platforms, ...(r.platforms || [])])]
+        return {
+          ...app,
+          has_installable_assets: true,
+          latest_version: r.latest_version ?? app.latest_version,
+          latest_release_date: r.latest_release_date ?? app.latest_release_date,
+          total_downloads: r.total_downloads ?? 0,
+          platforms: mergedPlatforms,
+        }
+      })
+      .filter((a) => a !== null)) as AppItem[]
+  } catch {
+    return items // 降级：网络/超时时不过滤
+  }
 }
 
 export async function fetchRepoDetail(owner: string, repo: string): Promise<AppItem> {
