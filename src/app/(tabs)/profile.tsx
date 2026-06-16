@@ -220,6 +220,7 @@ export default function ProfileTab() {
               placeholder="github_pat_..."
               placeholderTextColor="#BBB"
               secureTextEntry={!showToken}
+              keyboardType={showToken ? 'visible-password' : 'default'}
               autoCapitalize="none"
               autoCorrect={false}
             />
