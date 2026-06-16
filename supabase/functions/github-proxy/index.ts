@@ -76,26 +76,67 @@ serve(async (req) => {
       case 'check_installable_batch': {
         // 批量检查多个仓库的最新 Release 是否含可安装包，一次 Edge Function 调用并发检测
         const repos = (params?.repos || []) as Array<{ owner: string; repo: string }>
-        const INSTALL_EXTS = ['.apk', '.ipa', '.dmg', '.exe', '.msi', '.deb', '.rpm', '.appimage', '.flatpak', '.snap']
+        const INSTALL_EXTS = ['.apk', '.ipa', '.dmg', '.pkg', '.exe', '.msi', '.deb', '.rpm', '.appimage', '.flatpak', '.snap']
+        const VERIFY_EXTS = ['.asc', '.sig', '.sha256', '.sha512', '.md5']
+        const platformFromName = (name: string) => {
+          const lower = name.toLowerCase()
+          if (lower.endsWith('.apk')) return 'Android'
+          if (lower.endsWith('.ipa')) return 'iOS'
+          if (lower.endsWith('.dmg') || lower.endsWith('.pkg')) return 'macOS'
+          if (lower.endsWith('.exe') || lower.endsWith('.msi')) return 'Windows'
+          if (lower.endsWith('.deb') || lower.endsWith('.rpm') || lower.endsWith('.appimage') || lower.endsWith('.flatpak') || lower.endsWith('.snap')) return 'Linux'
+          return null
+        }
         const checks = await Promise.all(
           repos.map(async ({ owner, repo }) => {
             try {
-              const r = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/latest`, {
+              const r = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/releases?per_page=5`, {
                 headers: githubHeaders(token),
               })
-              if (!r.ok) return { key: `${owner}/${repo}`, ok: false }
-              const rel = await r.json()
-              const hasInstallable = (rel.assets || []).some((a: any) =>
-                INSTALL_EXTS.some((ext) => a.name.toLowerCase().endsWith(ext))
-              )
-              return { key: `${owner}/${repo}`, ok: hasInstallable }
+              if (!r.ok) return { key: `${owner}/${repo}`, result: { ok: false } }
+              const releases = await r.json()
+              for (const rel of releases || []) {
+                const assets = rel.assets || []
+                const installAssets = assets.filter((a: any) =>
+                  INSTALL_EXTS.some((ext) => a.name.toLowerCase().endsWith(ext))
+                )
+                if (installAssets.length === 0) continue
+                const verifyAssets = assets.filter((a: any) =>
+                  VERIFY_EXTS.some((ext) => a.name.toLowerCase().endsWith(ext))
+                )
+                const platforms = Array.from(new Set(installAssets.map((a: any) => platformFromName(a.name)).filter(Boolean)))
+                const totalDownloads = installAssets.reduce((sum: number, a: any) => sum + (a.download_count || 0), 0)
+                return {
+                  key: `${owner}/${repo}`,
+                  result: {
+                    ok: true,
+                    latest_version: rel.tag_name || rel.name || null,
+                    latest_release_date: rel.published_at || null,
+                    total_downloads: totalDownloads,
+                    platforms,
+                    install_assets: installAssets.map((a: any) => ({
+                      name: a.name,
+                      size: a.size,
+                      download_count: a.download_count || 0,
+                      browser_download_url: a.browser_download_url,
+                    })),
+                    verification_assets: verifyAssets.map((a: any) => ({
+                      name: a.name,
+                      size: a.size,
+                      download_count: a.download_count || 0,
+                      browser_download_url: a.browser_download_url,
+                    })),
+                  },
+                }
+              }
+              return { key: `${owner}/${repo}`, result: { ok: false } }
             } catch {
-              return { key: `${owner}/${repo}`, ok: false }
+              return { key: `${owner}/${repo}`, result: { ok: false } }
             }
           })
         )
-        const map: Record<string, boolean> = {}
-        checks.forEach(({ key, ok }) => { map[key] = ok })
+        const map: Record<string, unknown> = {}
+        checks.forEach(({ key, result }) => { map[key] = result })
         return new Response(JSON.stringify({ data: map }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         })

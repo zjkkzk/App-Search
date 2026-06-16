@@ -63,6 +63,16 @@ export interface AppItem {
   has_installable_assets: boolean;
 }
 
+export interface InstallableCheckResult {
+  ok: boolean;
+  latest_version?: string | null;
+  latest_release_date?: string | null;
+  total_downloads?: number;
+  platforms?: string[];
+  install_assets?: GitHubRelease['assets'];
+  verification_assets?: GitHubRelease['verification_assets'];
+}
+
 export interface DownloadRecord {
   id: string;
   app_id: number;
