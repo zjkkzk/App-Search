@@ -162,35 +162,6 @@ export default function ProfileTab() {
           <Text style={{ fontSize: 22, fontWeight: '700', color: '#1A1A1A' }}>我的</Text>
         </View>
 
-        {/* 统计卡片 4 格 */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 10, marginBottom: 20 }}>
-          {[
-            { label: '收藏应用', value: String(favCount),   icon: 'heart'       as const, color: '#FF4D88', route: '/favorites'      },
-            { label: '下载记录', value: String(dlCount),    icon: 'download'    as const, color: '#1677FF', route: '/downloads'      },
-            { label: '搜索历史', value: String(histCount),  icon: 'time'        as const, color: '#FF8C00', route: '/search-history' },
-            { label: 'API 配额', value: `${rateLimit.remaining}/${rateLimit.limit}`, icon: 'flash' as const, color: rateColor, route: null },
-          ].map((item) => (
-            <Pressable
-              key={item.label}
-              onPress={() => item.route ? router.push(item.route as any) : undefined}
-              android_ripple={{ color: '#F0F0F0' }}
-              style={{
-                width: '47.5%', backgroundColor: '#fff', borderRadius: 16, padding: 16,
-                alignItems: 'center', gap: 6,
-                boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }],
-              } as any}
-            >
-              <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: `${item.color}18`, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name={item.icon} size={20} color={item.color} />
-              </View>
-              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1A1A1A' }}>{item.value}</Text>
-              <Text style={{ fontSize: 12, color: '#888' }}>{item.label}</Text>
-              {item.label === 'API 配额' && (
-                <Text style={{ fontSize: 10, color: '#BBB' }}>重置 {resetTime}</Text>
-              )}
-            </Pressable>
-          ))}
-        </View>
 
         {/* 功能入口 */}
         <SectionTitle title="功能" />
@@ -217,6 +188,13 @@ export default function ProfileTab() {
                 onPress={() => setConfirmTarget('search')} trailingIcon="trash-outline" />
             </>
           )}
+          <Divider />
+          <Row
+            icon="flash-outline"
+            iconColor={rateColor}
+            label="API 配额"
+            value={`${rateLimit.remaining}/${rateLimit.limit}  重置 ${resetTime}`}
+          />
         </View>
 
         {/* Token 管理 */}
