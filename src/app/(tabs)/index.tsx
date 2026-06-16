@@ -9,15 +9,15 @@ import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
 
 const CATEGORIES = [
-  { key: 'latest',  label: '最新',    icon: 'flash',            color: '#FF6B35', bg: '#FFF3E0', q: 'topic:android-app OR topic:ios-app OR topic:electron stars:>200 archived:false' },
-  { key: 'rank',    label: '排行',    icon: 'trophy',           color: '#1677FF', bg: '#EBF3FF', q: 'topic:android-app OR topic:ios-app stars:>2000 archived:false' },
-  { key: 'android', label: 'Android', icon: 'logo-android',    color: '#3DDC84', bg: '#E8F5E9', q: 'topic:android-app stars:>500 archived:false' },
-  { key: 'ios',     label: 'iOS',     icon: 'logo-apple',      color: '#1A1A1A', bg: '#F5F5F7', q: 'topic:ios-app stars:>200 archived:false' },
-  { key: 'windows', label: 'Windows', icon: 'logo-windows',    color: '#00A4EF', bg: '#E3F2FD', q: 'topic:windows stars:>200 archived:false' },
-  { key: 'dev',     label: '开发',    icon: 'hammer',          color: '#9C27B0', bg: '#F3E5F5', q: 'topic:cli OR topic:terminal stars:>500 archived:false' },
-  { key: 'media',   label: '媒体',    icon: 'musical-notes',   color: '#E91E63', bg: '#FCE4EC', q: 'topic:music-player OR topic:video-player stars:>200 archived:false' },
-  { key: 'game',    label: '游戏',    icon: 'game-controller',  color: '#FF5722', bg: '#FBE9E7', q: 'topic:game stars:>200 archived:false' },
-] as const;
+  { key: 'latest',  label: '最新',    icon: 'flash',            color: '#FF6B35', bg: '#FFF3E0', q: 'topic:android-app stars:>100 archived:false',    sort: 'updated' },
+  { key: 'rank',    label: '排行',    icon: 'trophy',           color: '#1677FF', bg: '#EBF3FF', q: 'topic:android-app stars:>2000 archived:false',   sort: 'stars'   },
+  { key: 'android', label: 'Android', icon: 'logo-android',    color: '#3DDC84', bg: '#E8F5E9', q: 'topic:android-app stars:>500 archived:false',    sort: 'stars'   },
+  { key: 'ios',     label: 'iOS',     icon: 'logo-apple',      color: '#1A1A1A', bg: '#F5F5F7', q: 'topic:ios-app stars:>200 archived:false',         sort: 'stars'   },
+  { key: 'windows', label: 'Windows', icon: 'logo-windows',    color: '#00A4EF', bg: '#E3F2FD', q: 'topic:windows-app stars:>200 archived:false',    sort: 'stars'   },
+  { key: 'dev',     label: '开发',    icon: 'hammer',          color: '#9C27B0', bg: '#F3E5F5', q: 'topic:cli stars:>500 archived:false',             sort: 'stars'   },
+  { key: 'media',   label: '媒体',    icon: 'musical-notes',   color: '#E91E63', bg: '#FCE4EC', q: 'topic:music-player stars:>200 archived:false',   sort: 'stars'   },
+  { key: 'game',    label: '游戏',    icon: 'game-controller',  color: '#FF5722', bg: '#FBE9E7', q: 'topic:game stars:>200 archived:false',           sort: 'stars'   },
+];
 
 export default function HomeTab() {
   const router = useRouter();
@@ -39,7 +39,7 @@ export default function HomeTab() {
       else if (pageNum === 1) setLoading(true);
       const cat = CATEGORIES.find((c) => c.key === catKey) || CATEGORIES[0];
       // 首屏直接展示搜索结果，不阻塞等待安装包校验
-      const { items } = await searchRepos(cat.q, { page: pageNum, per_page: 20, sort: 'stars' });
+      const { items } = await searchRepos(cat.q, { page: pageNum, per_page: 20, sort: cat.sort || 'stars' });
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
       setHasMore(items.length >= 20);
