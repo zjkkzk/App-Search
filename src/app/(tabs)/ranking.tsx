@@ -78,10 +78,18 @@ export default function RankingScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      // 上报本地未发送的事件
+      // 上报本地未发送的事件；如有新事件则自动触发聚合，免去手动点击
       uploadPendingEvents((name, opts) =>
         supabase.functions.invoke(name, { body: opts.body as Record<string, unknown> }).then(() => {})
-      ).catch(() => {});
+      ).then(async (uploaded) => {
+        if (uploaded > 0) {
+          // 有新事件 → 静默聚合，完成后刷新列表
+          try {
+            await supabase.functions.invoke('aggregate-rankings', {});
+          } catch { /* ignore */ }
+          loadRankings(rankType, period);
+        }
+      }).catch(() => {});
       loadRankings(rankType, period);
     }, [loadRankings, rankType, period])
   );
