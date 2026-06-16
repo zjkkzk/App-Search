@@ -4,7 +4,7 @@
  * 支持：热门榜 / 下载榜 / 收藏榜  ×  周榜 / 月榜 / 总榜
  */
 import React, { useCallback, useState } from 'react';
-import { View, Text, Pressable, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -228,18 +228,53 @@ export default function RankingScreen() {
           <ActivityIndicator color="#1677FF" size="large" />
         </View>
       ) : items.length === 0 ? (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <Ionicons name="trophy-outline" size={56} color="#DDD" />
-          <Text style={{ fontSize: 15, color: '#AAA' }}>暂无榜单数据</Text>
-          <Text style={{ fontSize: 13, color: '#BBB', textAlign: 'center', paddingHorizontal: 40 }}>使用搜索、查看、下载功能后点击「刷新榜单」生成排行</Text>
+        <ScrollView contentContainerStyle={{ flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, paddingVertical: 40 }}>
+          <Ionicons name="trophy-outline" size={60} color="#E0E0E0" />
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginTop: 16, textAlign: 'center' }}>
+            全局榜单正在建立中
+          </Text>
+          <Text style={{ fontSize: 14, color: '#888', marginTop: 8, textAlign: 'center', lineHeight: 22 }}>
+            榜单基于全体用户的真实行为生成，数据越多，榜单越准确。
+          </Text>
+
+          {/* 步骤引导 */}
+          <View style={{ width: '100%', marginTop: 28, gap: 12 }}>
+            {[
+              { step: '1', icon: 'search-outline', color: '#1677FF', bg: '#EBF3FF', title: '搜索应用', desc: '在搜索页输入关键词，每次搜索都会计入统计' },
+              { step: '2', icon: 'apps-outline',   color: '#FF8C00', bg: '#FFF7E6', title: '浏览 / 收藏 / 下载', desc: '进入详情页查看、点击收藏或下载安装包' },
+              { step: '3', icon: 'refresh-outline', color: '#52C41A', bg: '#F6FFED', title: '刷新榜单', desc: '点击右上角「刷新榜单」，系统聚合数据生成排行' },
+            ].map((item) => (
+              <View key={item.step} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: '#fff', borderRadius: 14, padding: 14, boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0,0,0,0.06)' }] } as any}>
+                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: item.bg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Ionicons name={item.icon as any} size={20} color={item.color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: '#1677FF', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 10, color: '#fff', fontWeight: '700' }}>{item.step}</Text>
+                    </View>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1A1A' }}>{item.title}</Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#888', marginTop: 4, lineHeight: 18 }}>{item.desc}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
           <Pressable
             onPress={handleAggregateNow}
             android_ripple={{ color: '#E8F0FF' }}
-            style={{ marginTop: 8, paddingHorizontal: 24, paddingVertical: 10, backgroundColor: '#1677FF', borderRadius: 20 }}
+            style={{ marginTop: 24, paddingHorizontal: 32, paddingVertical: 12, backgroundColor: '#1677FF', borderRadius: 24, flexDirection: 'row', alignItems: 'center', gap: 8 }}
           >
-            <Text style={{ color: '#fff', fontWeight: '600' }}>立即生成榜单</Text>
+            {aggregating
+              ? <ActivityIndicator size={16} color="#fff" />
+              : <Ionicons name="refresh-outline" size={16} color="#fff" />}
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>立即生成榜单</Text>
           </Pressable>
-        </View>
+          <Text style={{ fontSize: 11, color: '#CCC', marginTop: 12, textAlign: 'center' }}>
+            榜单数据由所有用户共同贡献，匿名统计，不涉及个人隐私
+          </Text>
+        </ScrollView>
       ) : (
         <FlatList
           data={items}
