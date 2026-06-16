@@ -30,6 +30,7 @@ export interface GitHubRelease {
     download_count: number;
     browser_download_url: string;
   }>;
+  /** 签名/哈希校验文件，由 filterVerificationAssets 填充 */
   verification_assets?: Array<{
     name: string;
     size: number;
@@ -53,14 +54,13 @@ export interface AppItem {
   platforms: string[];
   latest_version: string | null;
   latest_release_date: string | null;
-  license_name: string | null;
-  archived: boolean;
-  open_issues_count: number;
-  has_installable_assets: boolean;
-  install_platforms: string[];
-  total_downloads: number;
   html_url: string;
   updated_at: string;
+  license: string | null;
+  archived: boolean;
+  open_issues_count: number;
+  total_downloads: number;
+  has_installable_assets: boolean;
 }
 
 export interface DownloadRecord {
