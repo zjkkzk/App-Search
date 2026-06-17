@@ -62,14 +62,38 @@ function rowToAppItem(r: any): AppItem {
   };
 }
 
-/** 调用 search-catalog Edge Function，只返回 app_catalog 中有安装包的项目 */
+/** 直接查 app_catalog 表，绕开 Edge Function，零冷启动 */
 async function fetchCatalog(params: {
   platform: string; topic: string; sort: string; page: number; per_page: number;
 }): Promise<{ items: AppItem[]; total_count: number }> {
-  const { data, error } = await supabase.functions.invoke('search-catalog', { body: params });
+  const { platform, topic, sort, page, per_page } = params;
+  const offset = (page - 1) * per_page;
+
+  const sortMap: Record<string, { col: string; asc: boolean }> = {
+    stars:     { col: 'stars',           asc: false },
+    updated:   { col: 'updated_at',      asc: false },
+    forks:     { col: 'forks',           asc: false },
+    downloads: { col: 'total_downloads', asc: false },
+  };
+  const { col, asc } = sortMap[sort] ?? sortMap.stars;
+
+  let query = supabase
+    .from('app_catalog')
+    .select('*', { count: 'exact' })
+    .eq('archived', false);
+
+  if (platform && platform !== '全平台') {
+    query = query.contains('platforms', [platform]);
+  }
+  if (topic) {
+    query = query.contains('topics', [topic]);
+  }
+
+  query = query.order(col, { ascending: asc }).range(offset, offset + per_page - 1);
+
+  const { data, error, count } = await query;
   if (error) throw new Error(error.message || '加载失败');
-  const items: AppItem[] = (data?.data || []).map(rowToAppItem);
-  return { items, total_count: data?.total_count || items.length };
+  return { items: (data || []).map(rowToAppItem), total_count: count || 0 };
 }
 
 export default function DiscoverTab() {
