@@ -84,41 +84,50 @@ export async function searchRepos(
   const ttl = 6 * HOUR
 
   // 命中缓存直接返回，后台刷新
-  const cached = await getCache<{ items: AppItem[]; total_count: number }>(cacheKey)
-  if (cached) {
+  // 注意：只信任 filtered===true 的缓存；兜底（未真正过滤）的结果不写缓存
+  const cached = await getCache<{ items: AppItem[]; total_count: number; filtered?: boolean }>(cacheKey)
+  if (cached && (!installableOnly || cached.filtered === true)) {
     ;(async () => {
       try {
         const fresh = await _fetchAndFilter(q, sort, order, page, perPage, installableOnly)
-        if (fresh.items.length > 0) await setCache(cacheKey, fresh, ttl)
+        if (fresh.filtered && fresh.items.length > 0) {
+          await setCache(cacheKey, { items: fresh.items, total_count: fresh.total_count, filtered: true }, ttl)
+        }
       } catch (e) {
         console.warn('[GitHub] Background refresh failed:', e)
       }
     })()
-    return cached
+    return { items: cached.items, total_count: cached.total_count }
   }
 
   const result = await _fetchAndFilter(q, sort, order, page, perPage, installableOnly)
-  if (result.items.length > 0) await setCache(cacheKey, result, ttl)
-  return result
+  // 只缓存经过真正过滤的结果，兜底数据不入缓存
+  if (result.filtered && result.items.length > 0) {
+    await setCache(cacheKey, { items: result.items, total_count: result.total_count, filtered: true }, ttl)
+  }
+  return { items: result.items, total_count: result.total_count }
 }
 
 /**
  * 搜索 + 可选 installableOnly 过滤，统一入口
+ * 返回 filtered=true 表示经过了真实的安装包过滤，filtered=false 为超时/失败兜底
  */
 async function _fetchAndFilter(
   q: string, sort: string, order: string, page: number, perPage: number,
   installableOnly: boolean,
-): Promise<{ items: AppItem[]; total_count: number }> {
+): Promise<{ items: AppItem[]; total_count: number; filtered: boolean }> {
   const raw = await _fetchSearchRepos(q, sort, order, page, perPage)
-  if (!installableOnly) return raw
+  if (!installableOnly) return { ...raw, filtered: false }
 
-  // enrich 并过滤，兜底：若全部无安装包则返回原始列表（避免空列表）
   const enriched = await enrichApps(raw.items)
   const installable = enriched.filter((a) => a.has_installable_assets)
-  return {
-    items: installable.length > 0 ? installable : raw.items,
-    total_count: raw.total_count,
+
+  if (installable.length > 0) {
+    // 有安装包的应用，过滤成功
+    return { items: installable, total_count: raw.total_count, filtered: true }
   }
+  // enrichApps 超时或 Edge Function 失败：兜底返回原始列表，标记未过滤（不会被缓存）
+  return { items: raw.items, total_count: raw.total_count, filtered: false }
 }
 
 async function _fetchSearchRepos(
