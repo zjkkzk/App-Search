@@ -22,9 +22,16 @@ function isValidHttpUrl(s: string): boolean {
 }
 
 function ensureAvatarUrl(url: string | null | undefined, owner: string): string | null {
-  if (url && isValidHttpUrl(url)) return url;
-  // 直接使用 GitHub 用户名头像 URL（无需数字 ID，稳定可用）
-  if (owner) return `https://github.com/${owner}.png?size=120`;
+  if (url && isValidHttpUrl(url)) {
+    // 将 github.com/*.png 重定向链替换为 CDN 直链，避免部分浏览器拦截跨域跳转
+    if (url.includes('github.com') && url.endsWith('.png')) {
+      const match = url.match(/github\.com\/([^/?]+)\.png/);
+      if (match) return `https://avatars.githubusercontent.com/${match[1]}?size=120`;
+    }
+    return url;
+  }
+  // 直接使用 avatars.githubusercontent.com CDN（无重定向，兼容所有浏览器）
+  if (owner) return `https://avatars.githubusercontent.com/${owner}?size=120`;
   return null;
 }
 
