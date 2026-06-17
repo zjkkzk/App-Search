@@ -239,9 +239,11 @@ export default function SearchTab() {
             )}
           </View>
         </ScrollView>
-      ) : loading && results.length === 0 ? (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      ) : (loading || loadingMore) && results.length === 0 ? (
+        // 首次加载或自动翻页重试期间，结果还为空时显示 loading，防止提前显示"未找到"
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
           <ActivityIndicator color="#1677FF" size="large" />
+          <Text style={{ fontSize: 13, color: '#AAA' }}>正在过滤无发行版项目…</Text>
         </View>
       ) : error && results.length === 0 ? (
         <View style={{ margin: 16, padding: 16, borderRadius: 12, backgroundColor: '#FFF2F0', borderWidth: 1, borderColor: '#FFCCC7' }}>
