@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
 import { addAppEvent } from '@/lib/events';
 import { searchRepos } from '@/lib/github';
+import { supabase } from '@/client/supabase';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 
@@ -44,11 +45,32 @@ export default function SearchTab() {
 
   const loadHotWords = useCallback(async () => {
     try {
+      // 优先从 Supabase 读取全局热词，保证所有用户共享同一份热搜榜
+      const { data, error } = await supabase
+        .from('app_events')
+        .select('keyword')
+        .eq('event_type', 'search')
+        .not('keyword', 'is', null);
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const countMap = new Map<string, number>();
+        for (const row of data) {
+          const kw = (row.keyword as string).toLowerCase().trim();
+          if (kw.length >= 2 && isSafeKeyword(kw)) {
+            countMap.set(kw, (countMap.get(kw) ?? 0) + 1);
+          }
+        }
+        const sorted = Array.from(countMap.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 20)
+          .map(([keyword]) => keyword);
+        if (sorted.length > 0) { setHotWords(sorted); return; }
+      }
+    } catch { /* 网络失败降级到本地 */ }
+    // 兜底：读本地 events
+    try {
       const { getPopularKeywords } = await import('@/lib/events');
       const kws = await getPopularKeywords(20);
-      if (kws.length > 0) {
-        setHotWords(kws.map((k) => k.keyword).filter(isSafeKeyword));
-      }
+      if (kws.length > 0) setHotWords(kws.map((k) => k.keyword).filter(isSafeKeyword));
     } catch { /* 静默失败 */ }
   }, []);
 
