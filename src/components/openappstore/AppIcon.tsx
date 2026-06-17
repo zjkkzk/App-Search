@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Image } from 'expo-image';
 import LetterAvatar from './LetterAvatar';
@@ -15,23 +15,23 @@ interface AppIconProps {
 }
 
 /**
- * 规范化 avatar URL：
- * - 传入有效 HTTP URL 直接使用
- * - github.com/*.png 跳转链转为 avatars CDN 直链
- * - 无 URL 时用 owner 构造 GitHub 官方 CDN 直链（无需额外 API 请求）
+ * avatars.githubusercontent.com/${owner}?size=120 是 GitHub 官方 CDN 直链，
+ * 无需任何 API 请求，直接构造即可。
+ * 兼容处理 github.com/*.png 跳转链。
  */
 function resolveAvatarUrl(url: string | null | undefined, owner: string): string | null {
   if (url) {
     try {
       const u = new URL(url);
       if (u.protocol === 'http:' || u.protocol === 'https:') {
+        // github.com/owner.png 跳转链 → 转为 CDN 直链
         if (url.includes('github.com') && url.endsWith('.png')) {
           const m = url.match(/github\.com\/([^/?]+)\.png/);
           if (m) return `https://avatars.githubusercontent.com/${m[1]}?size=120`;
         }
         return url;
       }
-    } catch { /* invalid url */ }
+    } catch { /* invalid url, fall through */ }
   }
   if (owner) return `https://avatars.githubusercontent.com/${owner}?size=120`;
   return null;
@@ -40,14 +40,10 @@ function resolveAvatarUrl(url: string | null | undefined, owner: string): string
 export default function AppIcon({
   owner = '', url, name, size = 48, className = '', priority = 'normal',
 }: AppIconProps) {
-  const [resolvedUrl, setResolvedUrl] = useState<string | null>(() => resolveAvatarUrl(url, owner));
+  // 纯派生计算，无 state、无 useEffect、无任何 API 请求
+  // url/owner 变化时 useMemo 自动重算，不触发额外渲染
+  const resolvedUrl = useMemo(() => resolveAvatarUrl(url, owner), [url, owner]);
   const [error, setError] = useState(false);
-
-  // url/owner 变化时同步重置（纯同步，无 API 请求）
-  useEffect(() => {
-    setResolvedUrl(resolveAvatarUrl(url, owner));
-    setError(false);
-  }, [url, owner]);
 
   if (!resolvedUrl || error) {
     return <LetterAvatar name={name} size={size} className={className} />;
