@@ -45,25 +45,13 @@ export default function SearchTab() {
 
   const loadHotWords = useCallback(async () => {
     try {
-      // 优先从 Supabase 读取全局热词，保证所有用户共享同一份热搜榜
-      const { data, error } = await supabase
-        .from('app_events')
-        .select('keyword')
-        .eq('event_type', 'search')
-        .not('keyword', 'is', null);
+      // 通过 SECURITY DEFINER RPC 绕过 RLS，读取全局热搜词排行
+      const { data, error } = await supabase.rpc('get_hot_keywords', { limit_n: 20 });
       if (!error && Array.isArray(data) && data.length > 0) {
-        const countMap = new Map<string, number>();
-        for (const row of data) {
-          const kw = (row.keyword as string).toLowerCase().trim();
-          if (kw.length >= 2 && isSafeKeyword(kw)) {
-            countMap.set(kw, (countMap.get(kw) ?? 0) + 1);
-          }
-        }
-        const sorted = Array.from(countMap.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 20)
-          .map(([keyword]) => keyword);
-        if (sorted.length > 0) { setHotWords(sorted); return; }
+        const words = (data as { keyword: string; cnt: number }[])
+          .map((r) => r.keyword)
+          .filter(isSafeKeyword);
+        if (words.length > 0) { setHotWords(words); return; }
       }
     } catch { /* 网络失败降级到本地 */ }
     // 兜底：读本地 events
