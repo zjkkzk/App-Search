@@ -36,9 +36,16 @@ Deno.serve(async (req: Request) => {
     const periods: Period[] = ['week', 'month', 'all']
     let totalUpserted = 0
 
+    // 加载黑名单，聚合时跳过这些无安装包的项目
+    const { data: denyRows } = await supabase
+      .from('ranking_denylist')
+      .select('owner, repo')
+    const denySet = new Set<string>(
+      (denyRows ?? []).map((r: any) => `${r.owner}/${r.repo}`)
+    )
+
     for (const period of periods) {
       const interval = PERIOD_INTERVALS[period]
-      const since = `now() - interval '${interval}'`
 
       // 聚合每个 app 各事件类型的计数
       const { data: aggData, error: aggErr } = await supabase
@@ -54,6 +61,9 @@ Deno.serve(async (req: Request) => {
       }
       const statsMap = new Map<number, AppStat>()
       for (const row of aggData ?? []) {
+        // 跳过黑名单项目（owner/repo 为空也跳过）
+        if (!row.owner || !row.repo) continue
+        if (denySet.has(`${row.owner}/${row.repo}`)) continue
         const id = Number(row.app_id)
         if (!statsMap.has(id)) {
           statsMap.set(id, {
