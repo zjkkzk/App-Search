@@ -276,12 +276,12 @@ async function saveUploadCursor(cursor: string): Promise<void> {
   await AS?.setItem(UPLOAD_CURSOR_KEY, cursor)
 }
 
-let _uploading = false   // 简易并发锁，避免多次同时上传
+// 并发锁，防止重叠上传
+let _uploading = false
 
 /**
- * 用原生 fetch 直接调用 track-event Edge Function，上传本地事件队列。
- * 内部维护 upload_cursor（已上传到哪个时间戳），带并发锁。
- * Safe to call on app foreground / network reconnect / after each search.
+ * 无参版本：直接用 fetch 上传本地挂起事件到 track-event Edge Function。
+ * 每次搜索后 fire-and-forget 调用，确保热词能在服务端累加。
  */
 export async function uploadPendingEventsToTrack(): Promise<number> {
   if (_uploading) return 0
@@ -290,38 +290,44 @@ export async function uploadPendingEventsToTrack(): Promise<number> {
     const all = await getAllEvents()
     if (all.length === 0) return 0
 
-    const cursor = Number(await getUploadCursor()) || 0
-    const pending = all.filter((e) => e.created_at > cursor).slice(-UPLOAD_BATCH)
+    const cursorStr = await getUploadCursor()
+    const cursor = Number(cursorStr) || 0
+
+    const pending = all
+      .filter((e) => e.created_at > cursor)
+      .slice(-UPLOAD_BATCH)
+
     if (pending.length === 0) return 0
 
     const deviceId = await getOrCreateDeviceId()
     const rows = pending.map((e) => ({
-      app_id: e.app_id ?? null,
-      app_name: e.app_name ?? null,
-      owner: e.owner ?? null,
-      repo: e.repo ?? null,
+      app_id:     e.app_id ?? 0,
+      app_name:   e.app_name ?? '',
+      owner:      e.owner ?? '',
+      repo:       e.repo ?? '',
+      avatar_url: '',
       event_type: e.event_type,
-      keyword: e.keyword ?? null,
-      platform: e.platform ?? null,
-      device_id: deviceId,
+      keyword:    e.keyword ?? null,
+      platform:   e.platform ?? null,
+      device_id:  deviceId,
     }))
 
-    const SUPABASE_URL = (globalThis as any).process?.env?.EXPO_PUBLIC_SUPABASE_URL
-      || 'https://backend.appmiaoda.com/projects/supabase324230210180399104'
-    const SUPABASE_KEY = (globalThis as any).process?.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY
-      || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNibGsxcnFhNWZrMSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzQ4NTg1MjgyLCJleHAiOjIwNjQxNjEyODJ9.HieIBaJ2S_5RXOlMxAJdVv-2lRgrE_EG3gRrIdUJOk'
+    // 直接 fetch，不依赖 supabase client（兼容所有平台）
+    const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''
+    const ANON_KEY     = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? ''
+    if (!SUPABASE_URL) return 0
 
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/track-event`, {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/track-event`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${ANON_KEY}`,
+        'apikey': ANON_KEY,
       },
       body: JSON.stringify({ events: rows }),
     })
 
-    if (!resp.ok) return 0
+    if (!res.ok) return 0
 
     const newCursor = Math.max(...pending.map((e) => e.created_at))
     await saveUploadCursor(String(newCursor))
@@ -333,9 +339,47 @@ export async function uploadPendingEventsToTrack(): Promise<number> {
   }
 }
 
-/** 兼容旧调用签名（保持向后兼容） */
-export async function uploadPendingEvents(
-  _supabaseFunctionsInvoke: (name: string, opts: { body: unknown }) => Promise<void>
-): Promise<number> {
-  return uploadPendingEventsToTrack()
+/**
+ * Upload pending local events to the global Supabase `track-event` Edge Function.
+ * Uses a cursor so already-uploaded events are not re-sent.
+ * Safe to call on app foreground / network reconnect.
+ */
+export async function uploadPendingEvents(supabaseFunctionsInvoke: (name: string, opts: { body: unknown }) => Promise<void>): Promise<number> {
+  try {
+    const all = await getAllEvents()
+    if (all.length === 0) return 0
+
+    const cursorStr = await getUploadCursor()
+    const cursor = Number(cursorStr) || 0
+
+    // Events are stored newest-first; find unuploaded ones (created_at > cursor)
+    const pending = all
+      .filter((e) => e.created_at > cursor)
+      .slice(-UPLOAD_BATCH)  // oldest UPLOAD_BATCH among pending
+
+    if (pending.length === 0) return 0
+
+    const deviceId = await getOrCreateDeviceId()
+    const rows = pending.map((e) => ({
+      app_id:     e.app_id ?? 0,
+      app_name:   e.app_name ?? '',
+      owner:      e.owner ?? '',
+      repo:       e.repo ?? '',
+      avatar_url: '',
+      event_type: e.event_type,
+      keyword:    e.keyword ?? null,
+      platform:   e.platform ?? null,
+      device_id:  deviceId,
+    }))
+
+    await supabaseFunctionsInvoke('track-event', { body: { events: rows } })
+
+    // Advance cursor to the latest uploaded event's timestamp
+    const newCursor = Math.max(...pending.map((e) => e.created_at))
+    await saveUploadCursor(String(newCursor))
+
+    return pending.length
+  } catch {
+    return 0
+  }
 }
