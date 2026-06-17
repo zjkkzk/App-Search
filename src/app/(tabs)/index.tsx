@@ -3,87 +3,67 @@ import { View, Text, Pressable, FlatList, ActivityIndicator } from 'react-native
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '@/client/supabase';
+import { LOCAL_CATALOG, filterByPlatform, filterByTopic } from '@/lib/catalog';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
 
 const PAGE_SIZE = 20;
 
-// 分类配置：platform/topic 基于 app_catalog 实际数据分布
-// platform=null 表示不限平台；topic=null 表示不限 topic
 const CATEGORIES: {
   key: string; label: string; icon: string; color: string; bg: string;
-  platform: string | null; topic: string | null; orderBy: string;
+  platform: string | null; topic: string | null; orderBy: 'updated_at' | 'stars';
 }[] = [
-  { key: 'latest',  label: '最新',    icon: 'flash',           color: '#FF6B35', bg: '#FFF3E0', platform: null,      topic: null,           orderBy: 'updated_at' },
-  { key: 'rank',    label: '排行',    icon: 'trophy',          color: '#1677FF', bg: '#EBF3FF', platform: null,      topic: null,           orderBy: 'stars'      },
-  { key: 'android', label: 'Android', icon: 'logo-android',   color: '#3DDC84', bg: '#E8F5E9', platform: 'Android', topic: null,           orderBy: 'stars'      },
-  { key: 'ios',     label: 'iOS',     icon: 'logo-apple',     color: '#1A1A1A', bg: '#F5F5F7', platform: 'iOS',     topic: null,           orderBy: 'stars'      },
-  { key: 'windows', label: 'Windows', icon: 'logo-windows',   color: '#00A4EF', bg: '#E3F2FD', platform: 'Windows', topic: null,           orderBy: 'stars'      },
-  { key: 'dev',     label: '开发',    icon: 'hammer',         color: '#9C27B0', bg: '#F3E5F5', platform: null,      topic: 'terminal',     orderBy: 'stars'      },
-  { key: 'media',   label: '媒体',    icon: 'musical-notes',  color: '#E91E63', bg: '#FCE4EC', platform: null,      topic: 'music',        orderBy: 'stars'      },
-  { key: 'game',    label: '游戏',    icon: 'game-controller', color: '#FF5722', bg: '#FBE9E7', platform: null,      topic: 'game',         orderBy: 'stars'      },
+  { key: 'latest',  label: '最新',    icon: 'flash',           color: '#FF6B35', bg: '#FFF3E0', platform: null,      topic: null,       orderBy: 'updated_at' },
+  { key: 'rank',    label: '排行',    icon: 'trophy',          color: '#1677FF', bg: '#EBF3FF', platform: null,      topic: null,       orderBy: 'stars'      },
+  { key: 'android', label: 'Android', icon: 'logo-android',   color: '#3DDC84', bg: '#E8F5E9', platform: 'Android', topic: null,       orderBy: 'stars'      },
+  { key: 'ios',     label: 'iOS',     icon: 'logo-apple',     color: '#1A1A1A', bg: '#F5F5F7', platform: 'iOS',     topic: null,       orderBy: 'stars'      },
+  { key: 'windows', label: 'Windows', icon: 'logo-windows',   color: '#00A4EF', bg: '#E3F2FD', platform: 'Windows', topic: null,       orderBy: 'stars'      },
+  { key: 'dev',     label: '开发',    icon: 'hammer',         color: '#9C27B0', bg: '#F3E5F5', platform: null,      topic: 'terminal', orderBy: 'stars'      },
+  { key: 'media',   label: '媒体',    icon: 'musical-notes',  color: '#E91E63', bg: '#FCE4EC', platform: null,      topic: 'music',    orderBy: 'stars'      },
+  { key: 'game',    label: '游戏',    icon: 'game-controller', color: '#FF5722', bg: '#FBE9E7', platform: null,      topic: 'game',     orderBy: 'stars'      },
 ];
+
+/** 从本地目录加载分类数据，无任何网络依赖 */
+function loadLocalPage(catKey: string, pageNum: number): { items: AppItem[]; hasMore: boolean } {
+  const cat = CATEGORIES.find((c) => c.key === catKey) || CATEGORIES[0];
+  let pool = LOCAL_CATALOG;
+  if (cat.platform) pool = filterByPlatform(cat.platform);
+  else if (cat.topic) pool = filterByTopic(cat.topic);
+  // 排序
+  pool = [...pool].sort((a, b) =>
+    cat.orderBy === 'updated_at'
+      ? (b.updated_at || '').localeCompare(a.updated_at || '')
+      : (b.stars || 0) - (a.stars || 0)
+  );
+  const from = (pageNum - 1) * PAGE_SIZE;
+  const items = pool.slice(from, from + PAGE_SIZE);
+  return { items, hasMore: from + PAGE_SIZE < pool.length };
+}
 
 export default function HomeTab() {
   const router = useRouter();
   const [apps, setApps] = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
+  const [error] = useState('');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [activeCategory, setActiveCategory] = useState('latest');
   const loadingRef = useRef(false);
 
-  const loadData = useCallback(async (pageNum = 1, isRefresh = false, catKey = activeCategory) => {
+  const loadData = useCallback((pageNum = 1, isRefresh = false, catKey = activeCategory) => {
     if (loadingRef.current && !isRefresh) return;
     loadingRef.current = true;
     try {
-      setError('');
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
 
-      const cat = CATEGORIES.find((c) => c.key === catKey) || CATEGORIES[0];
-      const from = (pageNum - 1) * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
-
-      // 直接查 app_catalog，零冷启动，不依赖 GitHub API
-      let query = supabase
-        .from('app_catalog')
-        .select('*')
-        .eq('archived', false)
-        .not('latest_version', 'is', null) // 只要有安装包的项目
-        .order(cat.orderBy, { ascending: false })
-        .range(from, to);
-
-      // 平台过滤：platforms 是数组，用 cs（contains）匹配
-      if (cat.platform) query = query.contains('platforms', [cat.platform]);
-      // topic 过滤：topics 是数组，用 cs 匹配
-      if (cat.topic) query = query.contains('topics', [cat.topic]);
-
-      const { data, error: dbError } = await query;
-      if (dbError) throw new Error(dbError.message);
-
-      const items: AppItem[] = (data || []).map((r: any): AppItem => ({
-        id: r.id, full_name: r.full_name, name: r.name,
-        description: r.description, owner: r.owner, repo: r.repo,
-        avatar_url: r.avatar_url || '', stars: r.stars || 0,
-        forks: r.forks || 0, language: r.language, topics: r.topics || [],
-        platforms: r.platforms || [], latest_version: r.latest_version,
-        latest_release_date: r.latest_release_date,
-        html_url: r.html_url || `https://github.com/${r.owner}/${r.repo}`,
-        updated_at: r.updated_at || '', license: r.license,
-        archived: r.archived || false, open_issues_count: r.open_issues_count || 0,
-        total_downloads: r.total_downloads || 0, has_installable_assets: true,
-      }));
-
+      // 完全本地，同步操作，零网络请求
+      const { items, hasMore: more } = loadLocalPage(catKey, pageNum);
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
-      setHasMore(items.length >= PAGE_SIZE);
-    } catch (e: any) {
-      setError(e?.message || '加载失败');
+      setHasMore(more);
     } finally {
       setLoading(false);
       setRefreshing(false);
