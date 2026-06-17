@@ -279,10 +279,10 @@ export async function filterInstallable<T extends { owner: string; repo: string 
       )
     )
 
-    // 严格过滤规则：
+    // 严格过滤规则（只有明确确认有安装包才展示）：
     // - ok:true  → 确认有安装包，保留
     // - ok:false → 确认无安装包，剔除
-    // - ok:null / 无结果（未检查/网络错误/超出批量限制）→ 未知，保留（不误杀）
+    // - ok:null / 无结果（网络错误）→ 状态未知，剔除（宁缺毋滥，等下次缓存命中再展示）
     const resultMap = new Map<string, boolean | null>()
     for (const r of data.data) {
       if (r?.key) resultMap.set(r.key, r.ok === true ? true : r.ok === false ? false : null)
@@ -290,16 +290,12 @@ export async function filterInstallable<T extends { owner: string; repo: string 
 
     return items.filter((_, i) => {
       const key = `${items[i].owner}/${items[i].repo}`
-      if (statusList[i] === true) return true          // L1/L2 缓存确认有
-      if (statusList[i] === false) {
-        // 缓存说无 → 以 API 最新结果为准（可能新增了发行版）
-        const apiResult = resultMap.get(key)
-        return apiResult === true                       // API 说有才保留
-      }
-      // statusList === null（未知）→ 看 API 结果
-      if (!resultMap.has(key)) return true             // 未被检查（超出限制/未发请求）→ 保留
+      if (statusList[i] === true) return true    // L1/L2 缓存确认有
+      if (statusList[i] === false) return false  // L1/L2 缓存确认无
+
+      // statusList === null → 未知，以 API 结果为准
       const apiResult = resultMap.get(key)
-      return apiResult !== false                       // null（网络错误）或 true → 保留；false → 剔除
+      return apiResult === true                  // 严格：只保留 ok:true，null/undefined/false 均剔除
     })
   } catch {
     // 异常时保守处理：剔除已知无发行版，保留其余
