@@ -191,6 +191,42 @@ export async function enrichApps(
 }
 
 /**
+ * 通用安装包过滤：适用于任何含 owner/repo 的列表（AppItem、RankItem 等）
+ * - 调用 check_installable_batch，只返回确认有安装包的条目
+ * - 超时（12s）或 Edge Function 失败时兜底返回原列表（避免空列表）
+ */
+export async function filterInstallable<T extends { owner: string; repo: string }>(
+  items: T[],
+  timeoutMs = 12000,
+): Promise<T[]> {
+  if (items.length === 0) return items
+  try {
+    const repos = items.map((a) => ({ owner: a.owner, repo: a.repo }))
+    const fetchPromise = callEdgeFunction({
+      action: 'check_installable_batch',
+      params: { repos },
+      token: cachedToken,
+    })
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), timeoutMs)
+    )
+    const data = await Promise.race([fetchPromise, timeoutPromise])
+    if (!Array.isArray(data?.data)) return items   // 超时兜底
+
+    const installableKeys = new Set<string>()
+    for (const r of data.data) {
+      if (r?.ok && r?.key) installableKeys.add(r.key)
+    }
+
+    const filtered = items.filter((a) => installableKeys.has(`${a.owner}/${a.repo}`))
+    // 若 Edge Function 返回空集（如所有 repo 都未找到发行包），兜底展示原列表
+    return filtered.length > 0 ? filtered : items
+  } catch {
+    return items
+  }
+}
+
+/**
  * @deprecated 改用 enrichApps（可 await），此函数保留供旧代码兼容
  */
 export async function enrichAppsInBackground(
