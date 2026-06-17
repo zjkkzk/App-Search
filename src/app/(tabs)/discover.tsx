@@ -62,6 +62,8 @@ export default function DiscoverTab() {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string>('');
   const loadingRef = useRef(false);
+  // 用 ref 标记是否已发起过首次请求，避免 apps 被过滤清空后触发无限循环
+  const hasFetchedRef = useRef(false);
 
   const loadData = useCallback(async (
     pageNum = 1, isRefresh = false,
@@ -69,15 +71,14 @@ export default function DiscoverTab() {
   ) => {
     if (loadingRef.current && !isRefresh) return;
     loadingRef.current = true;
+    hasFetchedRef.current = true; // 标记已发起请求，防止 useFocusEffect 重复触发
     setError('');
     try {
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
       const q = buildQuery(p, cat);
-      console.log(`[Discover] Loading query: ${q}`);
       // 首屏直接展示搜索结果，不阻塞等待安装包校验
       const { items } = await searchRepos(q, { page: pageNum, per_page: 20, sort: s });
-      console.log(`[Discover] Loaded ${items.length} items`);
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
       setHasMore(items.length >= 20);
@@ -99,14 +100,17 @@ export default function DiscoverTab() {
 
   const handleClearCacheAndReload = async () => {
     await clearAllCache();
+    hasFetchedRef.current = false; // 允许下次 focus 重新加载
     setPage(1);
     setApps([]);
     loadData(1, false);
   };
 
+  // 只在首次进入页面时加载，不依赖 apps.length
+  // 依赖 apps.length 会导致：enrichAppsInBackground 过滤后 apps 变空 → 再次触发 → 无限循环
   useFocusEffect(useCallback(() => {
-    if (apps.length === 0) loadData(1, false);
-  }, [apps.length, loadData]));
+    if (!hasFetchedRef.current) loadData(1, false);
+  }, [loadData]));
 
   const reset = (p: string, cat: string, s: string) => {
     setPlatform(p); setCategory(cat); setSort(s);
