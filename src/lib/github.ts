@@ -4,10 +4,31 @@ import { getCache, setCache, HOUR, DAY, searchCacheKey } from '@/lib/cache'
 let cachedToken: string | null = null
 
 /**
- * 会话级安装包状态缓存：key = "owner/repo", value = true(有)/false(无)/undefined(未知)
- * 避免同一 repo 在同一会话内重复调用 check_installable_batch
+ * 会话级安装包状态缓存（内存 Map）：快速访问，重启后清空
+ * 持久化缓存通过 cache.ts（AsyncStorage/localStorage）实现 24h TTL
  */
 const _installableCache = new Map<string, boolean>()
+
+const INSTALLABLE_TTL = 24 * DAY  // 持久化缓存 24h
+const _installableCacheKey = (owner: string, repo: string) => `installable:${owner}/${repo}`
+
+/** 读取持久化缓存，同时写入内存 Map */
+async function getInstallableStatus(owner: string, repo: string): Promise<boolean | null> {
+  const key = `${owner}/${repo}`
+  if (_installableCache.has(key)) return _installableCache.get(key)!
+  const persisted = await getCache<boolean>(_installableCacheKey(owner, repo))
+  if (persisted !== null) {
+    _installableCache.set(key, persisted)
+    return persisted
+  }
+  return null
+}
+
+/** 写入内存 Map + 持久化缓存 */
+async function setInstallableStatus(owner: string, repo: string, installable: boolean): Promise<void> {
+  _installableCache.set(`${owner}/${repo}`, installable)
+  await setCache(_installableCacheKey(owner, repo), installable, INSTALLABLE_TTL)
+}
 
 // 直接读取环境变量，避免依赖 supabase-js 客户端层
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
@@ -154,9 +175,9 @@ async function _fetchSearchRepos(
 
 /**
  * 批量查询安装包信息，返回 enriched 结果（可直接 await）
- * - 命中会话缓存的 repo 直接跳过，只请求未知的
- * - 失败或超时时返回原始 items（兜底不报错），同时通过 timedOut 标记告知调用方
- * - timeoutMs 默认 8000ms
+ * - 优先读取持久化缓存（24h TTL），缓存命中的 repo 不发 API 请求
+ * - 只对未知的 repo 调用 check_installable_batch
+ * - 失败或超时时返回已知缓存结果，通过 timedOut 标记告知调用方
  */
 export async function enrichApps(
   items: AppItem[],
@@ -164,37 +185,34 @@ export async function enrichApps(
 ): Promise<{ items: AppItem[]; timedOut: boolean }> {
   if (items.length === 0) return { items, timedOut: false }
 
-  // 1. 已缓存的直接处理，只对未知的发请求
-  const unknown = items.filter((a) => !_installableCache.has(`${a.owner}/${a.repo}`))
-  const fromCache = items.map((a): AppItem => {
-    const cached = _installableCache.get(`${a.owner}/${a.repo}`)
-    if (cached === true) return { ...a, has_installable_assets: true }
-    return a
-  })
+  // 1. 并行读取持久化缓存
+  const statusList = await Promise.all(
+    items.map((a) => getInstallableStatus(a.owner, a.repo))
+  )
 
-  if (unknown.length === 0) {
-    return { items: fromCache, timedOut: false }
-  }
+  const unknown = items.filter((_, i) => statusList[i] === null)
+  const fromCache = items.map((a, i): AppItem =>
+    statusList[i] === true ? { ...a, has_installable_assets: true } : a
+  )
+
+  if (unknown.length === 0) return { items: fromCache, timedOut: false }
 
   try {
     const repos = unknown.map((a) => ({ owner: a.owner, repo: a.repo }))
-    const fetchPromise = callEdgeFunction({
-      action: 'check_installable_batch',
-      params: { repos },
-      token: cachedToken,
-    })
-    const timeoutPromise = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), timeoutMs)
-    )
-    const data = await Promise.race([fetchPromise, timeoutPromise])
+    const data = await Promise.race([
+      callEdgeFunction({ action: 'check_installable_batch', params: { repos }, token: cachedToken }),
+      new Promise<null>((r) => setTimeout(() => r(null), timeoutMs)),
+    ])
 
-    // 超时：返回已缓存处理的结果，标记 timedOut=true
     if (!Array.isArray(data?.data)) return { items: fromCache, timedOut: true }
 
-    // 写入会话缓存
-    for (const r of data.data) {
-      if (r?.key) _installableCache.set(r.key, r.ok === true)
-    }
+    // 持久化写入（ok:true 和 ok:false 都缓存，避免重复查询）
+    await Promise.all(
+      data.data.map((r: any) => r?.key
+        ? setInstallableStatus(r.key.split('/')[0], r.key.split('/')[1], r.ok === true)
+        : Promise.resolve()
+      )
+    )
 
     const resultMap = new Map<string, any>()
     for (const r of data.data) {
@@ -204,7 +222,6 @@ export async function enrichApps(
     return {
       timedOut: false,
       items: fromCache.map((app): AppItem => {
-        // 已从缓存处理过（has_installable_assets=true）则保留
         if (app.has_installable_assets) return app
         const r = resultMap.get(`${app.owner}/${app.repo}`)
         if (!r?.ok) return app
@@ -224,9 +241,9 @@ export async function enrichApps(
 }
 
 /**
- * 通用安装包过滤：适用于任何含 owner/repo 的列表（AppItem、RankItem 等）
- * - 优先使用会话级 _installableCache，命中缓存的 repo 无需网络请求
- * - 超时（8s）或 Edge Function 失败时兜底返回原列表（避免空列表）
+ * 通用安装包过滤：适用于任何含 owner/repo 的列表
+ * - 优先读取持久化缓存，命中的 repo 不发 API 请求
+ * - 超时或失败时兜底返回原列表
  */
 export async function filterInstallable<T extends { owner: string; repo: string }>(
   items: T[],
@@ -234,45 +251,42 @@ export async function filterInstallable<T extends { owner: string; repo: string 
 ): Promise<T[]> {
   if (items.length === 0) return items
 
-  // 1. 先用缓存处理已知结果
-  const unknown = items.filter((a) => !_installableCache.has(`${a.owner}/${a.repo}`))
-  const cachedInstallable = items.filter((a) => _installableCache.get(`${a.owner}/${a.repo}`) === true)
+  // 1. 并行读取持久化缓存
+  const statusList = await Promise.all(
+    items.map((a) => getInstallableStatus(a.owner, a.repo))
+  )
+  const unknown = items.filter((_, i) => statusList[i] === null)
 
   if (unknown.length === 0) {
-    // 全部命中缓存：直接过滤
-    return cachedInstallable.length > 0 ? cachedInstallable : items
+    // 全部命中缓存
+    const cached = items.filter((_, i) => statusList[i] === true)
+    return cached.length > 0 ? cached : items
   }
 
   try {
     const repos = unknown.map((a) => ({ owner: a.owner, repo: a.repo }))
-    const fetchPromise = callEdgeFunction({
-      action: 'check_installable_batch',
-      params: { repos },
-      token: cachedToken,
-    })
-    const timeoutPromise = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), timeoutMs)
-    )
-    const data = await Promise.race([fetchPromise, timeoutPromise])
+    const data = await Promise.race([
+      callEdgeFunction({ action: 'check_installable_batch', params: { repos }, token: cachedToken }),
+      new Promise<null>((r) => setTimeout(() => r(null), timeoutMs)),
+    ])
 
-    // 超时兜底：返回已知可安装 + 未知的（保守展示）
     if (!Array.isArray(data?.data)) {
-      const knownGood = items.filter((a) => _installableCache.get(`${a.owner}/${a.repo}`) !== false)
-      return knownGood.length > 0 ? knownGood : items
+      // 超时：保留已知可安装的 + 未知的（不误杀）
+      const safe = items.filter((_, i) => statusList[i] !== false)
+      return safe.length > 0 ? safe : items
     }
 
-    // 写入会话缓存
-    for (const r of data.data) {
-      if (r?.key) _installableCache.set(r.key, r.ok === true)
-    }
+    // 持久化写入（ok:true 和 ok:false 都缓存）
+    await Promise.all(
+      data.data.map((r: any) => r?.key
+        ? setInstallableStatus(r.key.split('/')[0], r.key.split('/')[1], r.ok === true)
+        : Promise.resolve()
+      )
+    )
 
-    const installableKeys = new Set<string>()
-    for (const r of data.data) {
-      if (r?.ok && r?.key) installableKeys.add(r.key)
-    }
-    // 合并：缓存命中的 + 本次 API 确认的
-    const filtered = items.filter(
-      (a) => _installableCache.get(`${a.owner}/${a.repo}`) === true
+    const filtered = items.filter((_, i) =>
+      statusList[i] === true ||
+      data.data.find((r: any) => r?.key === `${items[i].owner}/${items[i].repo}`)?.ok === true
     )
     return filtered.length > 0 ? filtered : items
   } catch {
