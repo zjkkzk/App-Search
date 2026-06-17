@@ -255,9 +255,8 @@ export async function filterInstallable<T extends { owner: string; repo: string 
   const unknown = items.filter((_, i) => statusList[i] === null)
 
   if (unknown.length === 0) {
-    // 全部命中缓存
-    const cached = items.filter((_, i) => statusList[i] === true)
-    return cached.length > 0 ? cached : items
+    // 全部命中缓存，严格按过滤结果返回
+    return items.filter((_, i) => statusList[i] === true)
   }
 
   try {
@@ -268,9 +267,8 @@ export async function filterInstallable<T extends { owner: string; repo: string 
     ])
 
     if (!Array.isArray(data?.data)) {
-      // 超时：保留已知可安装的 + 未知的（不误杀）
-      const safe = items.filter((_, i) => statusList[i] !== false)
-      return safe.length > 0 ? safe : items
+      // 超时：保留已知可安装的 + 状态未知的（避免误杀），但严格剔除已知无发行版的
+      return items.filter((_, i) => statusList[i] !== false)
     }
 
     // 持久化写入（ok:true 和 ok:false 都缓存）
@@ -281,13 +279,14 @@ export async function filterInstallable<T extends { owner: string; repo: string 
       )
     )
 
-    const filtered = items.filter((_, i) =>
+    // 严格过滤：只保留缓存或 API 确认有发行版的项目
+    return items.filter((_, i) =>
       statusList[i] === true ||
       data.data.find((r: any) => r?.key === `${items[i].owner}/${items[i].repo}`)?.ok === true
     )
-    return filtered.length > 0 ? filtered : items
   } catch {
-    return items
+    // 异常时保守处理：剔除已知无发行版，保留其余
+    return items.filter((_, i) => statusList[i] !== false)
   }
 }
 
