@@ -81,12 +81,22 @@ export default function SearchTab() {
     addAppEvent({ event_type: 'search', keyword: k }).catch(() => {});
     try {
       setLoading(true); setSearched(true); setError('');
-      // 只查 app_catalog，结果均已验证有安装包
-      const { data, error } = await supabase.functions.invoke('search-catalog', {
-        body: { q: k, sort: 'stars', per_page: 30, page: 1 },
-      });
-      if (error) throw new Error(error.message || '搜索失败');
-      const items: AppItem[] = (data?.data || []).map((r: any): AppItem => ({
+      // 直接查 app_catalog，绕开 Edge Function，零冷启动，永远可靠
+      const term = k.toLowerCase();
+      const { data, error: dbError } = await supabase
+        .from('app_catalog')
+        .select('*')
+        .or(
+          `name.ilike.%${term}%,` +
+          `repo.ilike.%${term}%,` +
+          `full_name.ilike.%${term}%,` +
+          `description.ilike.%${term}%,` +
+          `owner.ilike.%${term}%`
+        )
+        .order('stars', { ascending: false })
+        .limit(30);
+      if (dbError) throw new Error(dbError.message || '搜索失败');
+      const items: AppItem[] = (data || []).map((r: any): AppItem => ({
         id: r.id, full_name: r.full_name, name: r.name,
         description: r.description, owner: r.owner, repo: r.repo,
         avatar_url: r.avatar_url || '', stars: r.stars || 0,
