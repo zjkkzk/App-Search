@@ -3,7 +3,7 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { searchRepos, enrichAppsInBackground } from '@/lib/github';
+import { searchRepos, enrichApps } from '@/lib/github';
 import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
@@ -71,22 +71,21 @@ export default function DiscoverTab() {
   ) => {
     if (loadingRef.current && !isRefresh) return;
     loadingRef.current = true;
-    hasFetchedRef.current = true; // 标记已发起请求，防止 useFocusEffect 重复触发
+    hasFetchedRef.current = true;
     setError('');
     try {
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
       const q = buildQuery(p, cat);
-      // 首屏直接展示搜索结果，不阻塞等待安装包校验
       const { items } = await searchRepos(q, { page: pageNum, per_page: 20, sort: s });
-      if (pageNum === 1) setApps(items);
-      else setApps((prev) => [...prev, ...items]);
+      // 等待 enrich 完成（含超时兜底），只展示有安装包的应用
+      const enriched = await enrichApps(items);
+      const installable = enriched.filter((a) => a.has_installable_assets);
+      // 若本批次 enrich 超时/全部失败，兜底展示原始结果而非空列表
+      const toShow = installable.length > 0 ? installable : items;
+      if (pageNum === 1) setApps(toShow);
+      else setApps((prev) => [...prev, ...toShow]);
       setHasMore(items.length >= 20);
-      // 后台静默补充版本/下载量信息（不过滤，发现页展示所有应用，安装包信息仅作徽章展示用）
-      enrichAppsInBackground(items, (enriched) => {
-        if (pageNum === 1) setApps(enriched);
-        else setApps((prev) => [...prev.slice(0, prev.length - items.length), ...enriched]);
-      });
     } catch (e: any) {
       console.warn('[Discover] Load failed:', e);
       setError(e?.message || '加载失败，请检查网络后重试');
