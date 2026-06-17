@@ -3,9 +3,9 @@ import { View, Text, TextInput, Pressable, FlatList, ScrollView, ActivityIndicat
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '@/client/supabase';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
 import { addAppEvent } from '@/lib/events';
+import { searchLocalCatalog } from '@/lib/catalog';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 
@@ -39,31 +39,11 @@ export default function SearchTab() {
 
   const loadHotWords = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from('safe_hot_words')
-        .select('keyword')
-        .order('search_count', { ascending: false })
-        .limit(20);
-      if (Array.isArray(data) && data.length > 0) {
-        setHotWords(data.map((r: any) => r.keyword).filter(isSafeKeyword));
-        return;
-      }
-      // 视图暂无数据时，直接从 app_events 聚合并过滤
-      const { data: events } = await supabase
-        .from('app_events')
-        .select('keyword')
-        .eq('event_type', 'search')
-        .not('keyword', 'is', null)
-        .neq('keyword', '');
-      if (Array.isArray(events) && events.length > 0) {
-        const freq: Record<string, number> = {};
-        for (const e of events) {
-          if (e.keyword && isSafeKeyword(e.keyword)) {
-            freq[e.keyword] = (freq[e.keyword] || 0) + 1;
-          }
-        }
-        const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k]) => k);
-        setHotWords(sorted);
+      // 从本地事件记录聚合热搜词，零网络依赖
+      const { getPopularKeywords } = await import('@/lib/events');
+      const kws = await getPopularKeywords(20);
+      if (kws.length > 0) {
+        setHotWords(kws.map((k) => k.keyword).filter(isSafeKeyword));
       }
     } catch { /* 静默失败 */ }
   }, []);
@@ -87,46 +67,8 @@ export default function SearchTab() {
     setResults([]);
 
     try {
-      // 全量拉取 app_catalog（仅有安装包的项目），然后 JS 端做关键词过滤。
-      // 注意：apps_cache 表没有 archived 列，所以 app_catalog 也没有，移除该过滤条件避免报错
-      const { data, error: dbError } = await supabase
-        .from('app_catalog')
-        .select('*')
-        .not('latest_version', 'is', null)   // 只要有安装包的项目
-        .order('stars', { ascending: false })
-        .limit(500);                          // 当前目录 <40 条，500 足够兜底
-
-      if (dbError) {
-        console.error('[Search] DB Error:', dbError);
-        setError(dbError.message || `查询失败 (${dbError.code || 'unknown'})`);
-        return;
-      }
-
-      console.log('[Search] Raw data count:', (data || []).length);
-
-      // JS 端关键词匹配：name / repo / full_name / description / owner
-      const lower = k.toLowerCase();
-      const matched = (data || []).filter((r: any) =>
-        r.name?.toLowerCase().includes(lower) ||
-        r.repo?.toLowerCase().includes(lower) ||
-        r.full_name?.toLowerCase().includes(lower) ||
-        r.description?.toLowerCase().includes(lower) ||
-        r.owner?.toLowerCase().includes(lower)
-      );
-      console.log('[Search] Matched count:', matched.length);
-
-      const items: AppItem[] = matched.map((r: any): AppItem => ({
-        id: r.id, full_name: r.full_name, name: r.name,
-        description: r.description, owner: r.owner, repo: r.repo,
-        avatar_url: r.avatar_url || '', stars: r.stars || 0,
-        forks: r.forks || 0, language: r.language, topics: r.topics || [],
-        platforms: r.platforms || [], latest_version: r.latest_version,
-        latest_release_date: r.latest_release_date,
-        html_url: r.html_url || `https://github.com/${r.owner}/${r.repo}`,
-        updated_at: r.updated_at || '', license: r.license,
-        archived: r.archived || false, open_issues_count: r.open_issues_count || 0,
-        total_downloads: r.total_downloads || 0, has_installable_assets: true,
-      }));
+      // 完全本地搜索，零网络依赖——彻底规避 CORS/RPC/PostgREST 所有问题
+      const items = searchLocalCatalog(k);
       setResults(items);
     } catch (e: any) {
       setError(e?.message || e?.toString() || '搜索失败，请重试');
