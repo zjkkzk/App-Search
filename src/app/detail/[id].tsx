@@ -277,7 +277,7 @@ export default function DetailScreen() {
         ]);
         setApp(detail);
         // Record view event
-        addAppEvent({ event_type: 'view', app_id: detail.id, app_name: detail.name, owner: owner ?? '', repo: repo ?? '' }).catch(() => {});
+        addAppEvent({ event_type: 'view', app_id: detail.id, app_name: detail.name, owner: owner ?? '', repo: repo ?? '', avatar_url: detail.avatar_url ?? '' }).catch(() => {});
         const installRels = rels.map((r) => ({
           ...r,
           assets: filterInstallAssets(r.assets),
@@ -300,10 +300,10 @@ export default function DetailScreen() {
     if (!app) return;
     if (favored) {
       await removeFavorite(app.id); setFavored(false);
-      addAppEvent({ event_type: 'favorite', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '' }).catch(() => {});
+      addAppEvent({ event_type: 'favorite', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
     } else {
       await addFavorite(app); setFavored(true);
-      addAppEvent({ event_type: 'favorite', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '' }).catch(() => {});
+      addAppEvent({ event_type: 'favorite', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
     }
   };
 
@@ -439,7 +439,7 @@ export default function DetailScreen() {
                                   file_size: asset.size,
                                   html_url: asset.browser_download_url,
                                 }).catch(() => {});
-                                addAppEvent({ event_type: 'download', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '' }).catch(() => {});
+                                addAppEvent({ event_type: 'download', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
                                 Linking.openURL(asset.browser_download_url);
                               }}
                               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
