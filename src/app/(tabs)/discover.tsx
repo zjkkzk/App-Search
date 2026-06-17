@@ -3,6 +3,7 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { supabase } from '@/client/supabase';
 import { searchRepos } from '@/lib/github';
 import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
@@ -19,14 +20,14 @@ const PLATFORMS = [
 ] as const;
 
 const CATEGORIES = [
-  { key: '全部',     term: 'app release' },
-  { key: '开发工具', term: 'topic:developer-tools' },
-  { key: '效率工具', term: 'topic:productivity' },
-  { key: '媒体',     term: 'topic:media' },
-  { key: '游戏',     term: 'topic:game' },
-  { key: '安全',     term: 'topic:security' },
-  { key: '社交',     term: 'topic:social' },
-  { key: '系统工具', term: 'topic:utility' },
+  { key: '全部',     topic: '' },
+  { key: '开发工具', topic: 'developer-tools' },
+  { key: '效率工具', topic: 'productivity' },
+  { key: '媒体',     topic: 'media' },
+  { key: '游戏',     topic: 'game' },
+  { key: '安全',     topic: 'security' },
+  { key: '社交',     topic: 'social' },
+  { key: '系统工具', topic: 'utility' },
 ];
 
 const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
@@ -35,20 +36,57 @@ const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
   { key: 'forks',   label: 'Forks',   icon: 'git-branch-outline' },
 ];
 
-function buildQuery(platform: string, category: string): string {
-  const cat = CATEGORIES.find((c) => c.key === category)?.term ?? 'app release';
-  const base = `${cat} stars:>100 archived:false`;
-  if (platform === '全平台') return base;
-  // 平台过滤用 topic: 格式，GitHub 搜索命中率高
-  const platformMap: Record<string, string> = {
-    'Android': 'topic:android',
-    'iOS':     'topic:ios',
-    'Windows': 'topic:windows',
-    'macOS':   'topic:macos',
-    'Linux':   'topic:linux',
+/** 从 app_catalog 行映射到 AppItem */
+function rowToAppItem(r: any): AppItem {
+  return {
+    id: r.id,
+    full_name: r.full_name,
+    name: r.name,
+    description: r.description,
+    owner: r.owner,
+    repo: r.repo,
+    avatar_url: r.avatar_url || '',
+    stars: r.stars || 0,
+    forks: r.forks || 0,
+    language: r.language,
+    topics: r.topics || [],
+    platforms: r.platforms || [],
+    latest_version: r.latest_version,
+    latest_release_date: r.latest_release_date,
+    html_url: r.html_url || `https://github.com/${r.owner}/${r.repo}`,
+    updated_at: r.updated_at || '',
+    license: r.license,
+    archived: r.archived || false,
+    open_issues_count: r.open_issues_count || 0,
+    total_downloads: r.total_downloads || 0,
+    has_installable_assets: true, // catalog 里只有有安装包的项目
   };
-  const platformTerm = platformMap[platform] ?? platform.toLowerCase();
-  return `${platformTerm} ${base}`;
+}
+
+/** 调用 search-catalog Edge Function，空目录时降级到 GitHub 搜索 */
+async function fetchCatalog(params: {
+  platform: string; topic: string; sort: string; page: number; per_page: number;
+}): Promise<{ items: AppItem[]; total_count: number; fromCatalog: boolean }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('search-catalog', { body: params });
+    if (error) throw error;
+    const items: AppItem[] = (data?.data || []).map(rowToAppItem);
+    if (items.length > 0) return { items, total_count: data.total_count || items.length, fromCatalog: true };
+  } catch (e) {
+    console.warn('[Discover] search-catalog failed, fallback to GitHub:', e);
+  }
+  // 降级：目录为空时走 GitHub API（保证首次部署有数据）
+  const platformMap: Record<string, string> = {
+    'Android': 'topic:android', 'iOS': 'topic:ios',
+    'Windows': 'topic:windows', 'macOS': 'topic:macos', 'Linux': 'topic:linux',
+  };
+  const topicPart = params.topic ? `topic:${params.topic}` : 'app release';
+  const platPart = params.platform !== '全平台' ? `${platformMap[params.platform] ?? ''} ` : '';
+  const q = `${platPart}${topicPart} stars:>100 archived:false`;
+  const { items, total_count } = await searchRepos(q, {
+    sort: params.sort, page: params.page, per_page: params.per_page,
+  });
+  return { items, total_count, fromCatalog: false };
 }
 
 export default function DiscoverTab() {
@@ -76,8 +114,8 @@ export default function DiscoverTab() {
     try {
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
-      const q = buildQuery(p, cat);
-      const { items } = await searchRepos(q, { page: pageNum, per_page: 20, sort: s });
+      const topic = CATEGORIES.find((c) => c.key === cat)?.topic ?? '';
+      const { items } = await fetchCatalog({ platform: p, topic, sort: s, page: pageNum, per_page: 20 });
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
       setHasMore(items.length >= 20);
