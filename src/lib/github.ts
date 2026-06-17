@@ -31,8 +31,8 @@ async function setInstallableStatus(owner: string, repo: string, installable: bo
 }
 
 // 直接读取环境变量，避免依赖 supabase-js 客户端层
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
-const SUPABASE_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || ''
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://backend.appmiaoda.com/projects/supabase324230210180399104'
+const SUPABASE_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNibGsxcnFhNWZrMSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzQ4NTg1MjgyLCJleHAiOjIwNjQxNjEyODJ9.HieIBaJ2S_5RXOlMxAJdVv-2lRgrE_eEG3gRrIdUJOk'
 const EDGE_FN_URL = `${SUPABASE_URL}/functions/v1/github-proxy`
 
 export async function setGitHubToken(token: string | null) {
