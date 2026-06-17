@@ -2,21 +2,31 @@
   "expo": {
     "name": "开源应用商店",
     "slug": "open-app-store",
-    "version": "1.0.124",
+    "version": "1.0.134",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "scheme": "openappstore",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F6F8"
+    },
     "ios": {
       "supportsTablet": true,
       "buildNumber": "1",
-      "bundleIdentifier": "com.miaoda.openappstore"
+      "bundleIdentifier": "com.miaoda.openappstore",
+      "infoPlist": {
+        "UIViewControllerBasedStatusBarAppearance": true
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
+        "backgroundColor": "#F5F6F8"
       },
-      "predictiveBackGestureEnabled": false,
+      "predictiveBackGestureEnabled": true,
       "versionCode": 2,
       "package": "com.miaoda.openappstore",
       "softwareKeyboardLayoutMode": "pan"
@@ -37,6 +47,7 @@
       "expo-image",
       "expo-file-system",
       "expo-sharing",
+      "expo-splash-screen",
       "@react-native-async-storage/expo-with-async-storage"
     ],
     "router": {
