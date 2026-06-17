@@ -179,7 +179,6 @@ export default function ProfileTab() {
 
 
         {/* 功能入口 */}
-        <SectionTitle title="功能" />
         <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
           <Row icon="heart-outline" iconColor="#FF4D88" label="我的收藏" value={`${favCount} 个`}
             onPress={() => router.push('/favorites' as any)} />
