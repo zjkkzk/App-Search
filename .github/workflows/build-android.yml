@@ -71,16 +71,21 @@ jobs:
 
           # Add aliyun mirrors to buildscript repositories
           if 'maven.aliyun.com' not in content:
+              # 用双引号，避免 \' 被注入 Groovy 后产生语法错误
+              aliyun_google = '    maven { url "https://maven.aliyun.com/repository/google" }'
+              aliyun_public = '    maven { url "https://maven.aliyun.com/repository/public" }'
+              aliyun_plugin = '    maven { url "https://maven.aliyun.com/repository/gradle-plugin" }'
+
               # buildscript repos
               content = re.sub(
                   r'(buildscript\s*\{\s*repositories\s*\{)',
-                  r'\1\n    maven { url \'https://maven.aliyun.com/repository/google\' }\n    maven { url \'https://maven.aliyun.com/repository/public\' }\n    maven { url \'https://maven.aliyun.com/repository/gradle-plugin\' }',
+                  r'\1' + '\n' + aliyun_google + '\n' + aliyun_public + '\n' + aliyun_plugin,
                   content
               )
               # allprojects repos
               content = re.sub(
                   r'(allprojects\s*\{\s*repositories\s*\{)',
-                  r'\1\n    maven { url \'https://maven.aliyun.com/repository/google\' }\n    maven { url \'https://maven.aliyun.com/repository/public\' }',
+                  r'\1' + '\n' + aliyun_google + '\n' + aliyun_public,
                   content
               )
 
@@ -248,3 +253,4 @@ jobs:
           generate_release_notes: true
           make_latest: true
           files: android/app/build/outputs/apk/release/*.apk
+
