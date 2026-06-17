@@ -146,20 +146,13 @@ async function _fetchAndFilter(
   const raw = await _fetchSearchRepos(q, sort, order, page, perPage)
   if (!installableOnly) return { ...raw, filtered: false }
 
-  const { items: enriched, timedOut } = await enrichApps(raw.items)
-  const installable = enriched.filter((a) => a.has_installable_assets)
-
-  if (installable.length > 0) {
-    return { items: installable, total_count: raw.total_count, filtered: true }
-  }
-
-  // 区分「超时/限速」和「真正没有安装包」：
-  // - timedOut=true：enrichApps 网络超时，无法判断，兜底展示原列表（不入缓存）
-  // - timedOut=false：enrichApps 正常完成但全部 ok:false，说明这批结果真的没有安装包，返回空
-  if (timedOut) {
-    return { items: raw.items, total_count: raw.total_count, filtered: false }
-  }
-  return { items: [], total_count: raw.total_count, filtered: true }
+  // 使用 filterInstallable：
+  // - 确认有发行版的保留，确认没有的剔除
+  // - 超时/限速时只剔除缓存明确为 false 的，保留未知项目（不误杀）
+  // - 全部未知或全部被误判时兜底返回原列表（永不返回空）
+  const filtered = await filterInstallable(raw.items)
+  const wasFiltered = filtered.length < raw.items.length
+  return { items: filtered, total_count: raw.total_count, filtered: wasFiltered }
 }
 
 async function _fetchSearchRepos(
