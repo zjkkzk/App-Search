@@ -36,6 +36,7 @@ Deno.serve(async (req) => {
       .from('app_catalog')
       .select('*', { count: 'exact' })
       .eq('archived', false)
+      .not('latest_version', 'is', null)  // 只返回有安装包的项目
 
     // 平台过滤
     if (platform && platform !== '全平台') {
