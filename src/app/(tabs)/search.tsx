@@ -103,13 +103,13 @@ export default function SearchTab() {
       setLoadingMore(true);
     }
 
-    // 远程搜索（installableOnly=true，per_page=100 增大候选池）
+    // 远程搜索（installableOnly=true，per_page=50 与 Edge Function 批量上限对齐）
     try {
       const result = await searchRepos(k, {
         sort: 'stars',
         order: 'desc',
         page: pageNum,
-        per_page: 100,
+        per_page: 50,
         installableOnly: true,
       });
 
