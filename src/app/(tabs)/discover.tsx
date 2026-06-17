@@ -3,7 +3,7 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '@/client/supabase';
+import { LOCAL_CATALOG } from '@/lib/catalog';
 import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
@@ -35,66 +35,30 @@ const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
   { key: 'forks',   label: 'Forks',   icon: 'git-branch-outline' },
 ];
 
-/** 从 app_catalog 行映射到 AppItem */
-function rowToAppItem(r: any): AppItem {
-  return {
-    id: r.id,
-    full_name: r.full_name,
-    name: r.name,
-    description: r.description,
-    owner: r.owner,
-    repo: r.repo,
-    avatar_url: r.avatar_url || '',
-    stars: r.stars || 0,
-    forks: r.forks || 0,
-    language: r.language,
-    topics: r.topics || [],
-    platforms: r.platforms || [],
-    latest_version: r.latest_version,
-    latest_release_date: r.latest_release_date,
-    html_url: r.html_url || `https://github.com/${r.owner}/${r.repo}`,
-    updated_at: r.updated_at || '',
-    license: r.license,
-    archived: r.archived || false,
-    open_issues_count: r.open_issues_count || 0,
-    total_downloads: r.total_downloads || 0,
-    has_installable_assets: true, // catalog 里只有有安装包的项目
-  };
-}
 
-/** 直接查 app_catalog 表，绕开 Edge Function，零冷启动 */
-async function fetchCatalog(params: {
+/** 从本地目录加载发现页数据，无任何网络依赖 */
+function fetchLocalCatalog(params: {
   platform: string; topic: string; sort: string; page: number; per_page: number;
-}): Promise<{ items: AppItem[]; total_count: number }> {
+}): { items: AppItem[]; total_count: number } {
   const { platform, topic, sort, page, per_page } = params;
-  const offset = (page - 1) * per_page;
 
-  const sortMap: Record<string, { col: string; asc: boolean }> = {
-    stars:     { col: 'stars',           asc: false },
-    updated:   { col: 'updated_at',      asc: false },
-    forks:     { col: 'forks',           asc: false },
-    downloads: { col: 'total_downloads', asc: false },
-  };
-  const { col, asc } = sortMap[sort] ?? sortMap.stars;
-
-  let query = supabase
-    .from('app_catalog')
-    .select('*', { count: 'exact' })
-    .eq('archived', false)
-    .not('latest_version', 'is', null); // 只返回有安装包（有 release）的项目
-
+  let pool = LOCAL_CATALOG;
   if (platform && platform !== '全平台') {
-    query = query.contains('platforms', [platform]);
+    pool = pool.filter((r) => r.platforms?.includes(platform));
   }
   if (topic) {
-    query = query.contains('topics', [topic]);
+    pool = pool.filter((r) => r.topics?.includes(topic));
   }
 
-  query = query.order(col, { ascending: asc }).range(offset, offset + per_page - 1);
+  // 排序
+  pool = [...pool].sort((a, b) => {
+    if (sort === 'updated') return (b.updated_at || '').localeCompare(a.updated_at || '');
+    if (sort === 'forks') return (b.forks || 0) - (a.forks || 0);
+    return (b.stars || 0) - (a.stars || 0);
+  });
 
-  const { data, error, count } = await query;
-  if (error) throw new Error(error.message || '加载失败');
-  return { items: (data || []).map(rowToAppItem), total_count: count || 0 };
+  const offset = (page - 1) * per_page;
+  return { items: pool.slice(offset, offset + per_page), total_count: pool.length };
 }
 
 export default function DiscoverTab() {
@@ -110,7 +74,7 @@ export default function DiscoverTab() {
   const pageRef = useRef(1);          // 用 ref 追踪页码，避免 stale closure
   const hasFetchedRef = useRef(false); // 首次请求发出后才允许 onEndReached 分页
 
-  const loadData = useCallback(async (
+  const loadData = useCallback((
     pageNum = 1, isRefresh = false,
     p = platform, cat = category, s = sort,
   ) => {
@@ -122,7 +86,8 @@ export default function DiscoverTab() {
       if (isRefresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
       const topic = CATEGORIES.find((c) => c.key === cat)?.topic ?? '';
-      const { items } = await fetchCatalog({ platform: p, topic, sort: s, page: pageNum, per_page: 20 });
+      // 完全本地，同步，零网络依赖
+      const { items } = fetchLocalCatalog({ platform: p, topic, sort: s, page: pageNum, per_page: 20 });
       if (pageNum === 1) setApps(items);
       else setApps((prev) => [...prev, ...items]);
       pageRef.current = pageNum;
