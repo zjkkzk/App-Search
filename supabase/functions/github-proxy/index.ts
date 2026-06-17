@@ -101,12 +101,13 @@ serve(async (req) => {
       // 批量校验仓库是否含安装包
       // 优先读 repo_installable_cache（共享 DB 缓存）
       // 缓存未命中才调用 GitHub API，并将结果写回 DB
+      // 规则：只有明确确认 has_release=false 时才返回 ok:false
+      //       网络错误/API 异常一律返回 ok:null（未知），客户端保留该条目
       case 'check_installable_batch': {
         const repos: Array<{ owner: string; repo: string }> = params?.repos || []
         const supabase = makeSupabase()
 
-        // ── 1. 批量读 DB 缓存 ──────────────────────────────────────
-        const keys = repos.slice(0, 25).map((r) => `${r.owner}/${r.repo}`)
+        // ── 1. 批量读 DB 缓存（不限数量，DB 缓存覆盖所有传入 repos）──
         const { data: cachedRows } = await supabase
           .from('repo_installable_cache')
           .select('owner, repo, has_release, latest_version, latest_release_date, total_downloads, platforms, checked_at')
@@ -123,8 +124,8 @@ serve(async (req) => {
         }
 
         // ── 2. 区分缓存命中 / 未命中 ─────────────────────────────
-        const toFetch = repos.slice(0, 25).filter((r) => !cacheMap.has(`${r.owner}/${r.repo}`))
-        const cachedResults = repos.slice(0, 25)
+        const toFetch = repos.filter((r) => !cacheMap.has(`${r.owner}/${r.repo}`))
+        const cachedResults = repos
           .filter((r) => cacheMap.has(`${r.owner}/${r.repo}`))
           .map(({ owner, repo }) => {
             const row = cacheMap.get(`${owner}/${repo}`)
@@ -137,22 +138,27 @@ serve(async (req) => {
               : { key: `${owner}/${repo}`, ok: false, from_cache: true }
           })
 
-        // ── 3. GitHub API 查询未缓存的仓库 ───────────────────────
+        // ── 3. GitHub API 查询未缓存的仓库（限 30 个防限速）────────
         const freshResults: any[] = []
         const dbUpserts: any[] = []
 
         if (toFetch.length > 0) {
           const settled = await Promise.allSettled(
-            toFetch.map(async ({ owner, repo }) => {
+            toFetch.slice(0, 30).map(async ({ owner, repo }) => {
               const key = `${owner}/${repo}`
               try {
                 const r = await fetch(
                   `${GITHUB_API_BASE}/repos/${owner}/${repo}/releases?per_page=5`,
                   { headers: githubHeaders(token) }
                 )
+                // 限速(403/429)或服务器错误：返回 ok:null（未知），不缓存，不误杀
+                if (r.status === 403 || r.status === 429 || r.status >= 500) {
+                  return { key, ok: null }
+                }
+                // 404 / 仓库不存在：明确无发行版
                 if (!r.ok) return { key, ok: false }
-                const releases = await r.json() as any[]
 
+                const releases = await r.json() as any[]
                 for (const rel of releases) {
                   const assets: any[] = rel.assets || []
                   const installAssets = assets.filter((a: any) =>
@@ -169,7 +175,6 @@ serve(async (req) => {
                   const total_downloads = installAssets.reduce(
                     (sum: number, a: any) => sum + (a.download_count || 0), 0
                   )
-
                   return {
                     key, ok: true,
                     latest_version: rel.tag_name,
@@ -187,9 +192,11 @@ serve(async (req) => {
                     })),
                   }
                 }
+                // releases 为空或无安装包：明确无
                 return { key, ok: false }
               } catch {
-                return { key, ok: false }
+                // 网络异常：未知，不误杀
+                return { key, ok: null }
               }
             })
           )
@@ -198,20 +205,27 @@ serve(async (req) => {
             if (s.status !== 'fulfilled' || !s.value) continue
             const v = s.value as any
             freshResults.push(v)
-            // 准备 DB upsert（不管 ok 还是 false 都缓存，避免重复查询）
-            const [o, rp] = v.key.split('/')
-            dbUpserts.push({
-              owner: o, repo: rp,
-              has_release: v.ok === true,
-              latest_version: v.latest_version ?? null,
-              latest_release_date: v.latest_release_date ?? null,
-              total_downloads: v.total_downloads ?? 0,
-              platforms: v.platforms ?? [],
-              checked_at: new Date().toISOString(),
-            })
+            // ok:null（未知）不写入 DB 缓存，避免污染
+            if (v.ok !== null) {
+              const [o, rp] = v.key.split('/')
+              dbUpserts.push({
+                owner: o, repo: rp,
+                has_release: v.ok === true,
+                latest_version: v.latest_version ?? null,
+                latest_release_date: v.latest_release_date ?? null,
+                total_downloads: v.total_downloads ?? 0,
+                platforms: v.platforms ?? [],
+                checked_at: new Date().toISOString(),
+              })
+            }
           }
 
-          // ── 4. 异步写回 DB 缓存（不阻塞响应）────────────────────
+          // ── 4. 超出 30 个限制的仓库补充为 ok:null（未知，不过滤）──
+          for (const { owner, repo } of toFetch.slice(30)) {
+            freshResults.push({ key: `${owner}/${repo}`, ok: null })
+          }
+
+          // ── 5. 异步写回 DB 缓存 ───────────────────────────────────
           if (dbUpserts.length > 0) {
             supabase.from('repo_installable_cache')
               .upsert(dbUpserts, { onConflict: 'owner,repo' })
