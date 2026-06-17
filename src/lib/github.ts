@@ -123,29 +123,34 @@ async function _fetchSearchRepos(
 }
 
 /**
- * 后台静默增强：批量查询安装包信息，填充版本/下载量/平台字段
- * 不过滤结果，不阻塞首屏，失败时静默忽略
+ * 批量查询安装包信息，返回 enriched 结果（可直接 await）
+ * - 失败或超时时返回原始 items（兜底不报错）
+ * - timeoutMs 默认 12000ms
  */
-export async function enrichAppsInBackground(
+export async function enrichApps(
   items: AppItem[],
-  onUpdate: (enriched: AppItem[]) => void
-): Promise<void> {
-  if (items.length === 0) return
+  timeoutMs = 12000,
+): Promise<AppItem[]> {
+  if (items.length === 0) return items
   try {
     const repos = items.map((a) => ({ owner: a.owner, repo: a.repo }))
-    const data = await callEdgeFunction({
+    const fetchPromise = callEdgeFunction({
       action: 'check_installable_batch',
       params: { repos },
       token: cachedToken,
     })
-    if (!Array.isArray(data?.data)) return
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), timeoutMs)
+    )
+    const data = await Promise.race([fetchPromise, timeoutPromise])
+    if (!Array.isArray(data?.data)) return items
 
     const resultMap = new Map<string, any>()
     for (const r of data.data) {
       if (r?.key) resultMap.set(r.key, r)
     }
 
-    const enriched = items.map((app): AppItem => {
+    return items.map((app): AppItem => {
       const r = resultMap.get(`${app.owner}/${app.repo}`)
       if (!r?.ok) return app
       return {
@@ -157,10 +162,20 @@ export async function enrichAppsInBackground(
         platforms: [...new Set([...app.platforms, ...(r.platforms || [])])],
       }
     })
-    onUpdate(enriched)
   } catch {
-    // 静默失败，不影响已展示的列表
+    return items
   }
+}
+
+/**
+ * @deprecated 改用 enrichApps（可 await），此函数保留供旧代码兼容
+ */
+export async function enrichAppsInBackground(
+  items: AppItem[],
+  onUpdate: (enriched: AppItem[]) => void
+): Promise<void> {
+  const enriched = await enrichApps(items)
+  if (enriched !== items) onUpdate(enriched)
 }
 
 export async function fetchRepoDetail(owner: string, repo: string): Promise<AppItem> {
