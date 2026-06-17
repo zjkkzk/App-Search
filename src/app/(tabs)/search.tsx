@@ -87,18 +87,32 @@ export default function SearchTab() {
     setResults([]);
 
     try {
-      // 调用服务端 RPC，完全绕开 JS 客户端 URL 编码对 % 的歧义
-      // search_apps() 内部用 latest_version IS NOT NULL 过滤无安装包项目
-      const { data, error: rpcError } = await supabase
-        .rpc('search_apps', { q: k, lim: 30 });
+      // 全量拉取 app_catalog（仅有安装包的项目），然后 JS 端做关键词过滤。
+      // 这样彻底绕开 PostgREST filter 的 URL 编码问题和 RPC schema cache 不可靠问题。
+      const { data, error: dbError } = await supabase
+        .from('app_catalog')
+        .select('*')
+        .eq('archived', false)
+        .not('latest_version', 'is', null)   // 只要有安装包的项目
+        .order('stars', { ascending: false })
+        .limit(500);                          // 当前目录 <40 条，500 足够兜底
 
-      if (rpcError) {
-        // 显示具体错误，绝不静默失败
-        setError(rpcError.message || rpcError.hint || `搜索失败 (${rpcError.code || 'unknown'})`);
+      if (dbError) {
+        setError(dbError.message || `查询失败 (${dbError.code || 'unknown'})`);
         return;
       }
 
-      const items: AppItem[] = (data || []).map((r: any): AppItem => ({
+      // JS 端关键词匹配：name / repo / full_name / description / owner
+      const lower = k.toLowerCase();
+      const matched = (data || []).filter((r: any) =>
+        r.name?.toLowerCase().includes(lower) ||
+        r.repo?.toLowerCase().includes(lower) ||
+        r.full_name?.toLowerCase().includes(lower) ||
+        r.description?.toLowerCase().includes(lower) ||
+        r.owner?.toLowerCase().includes(lower)
+      );
+
+      const items: AppItem[] = matched.map((r: any): AppItem => ({
         id: r.id, full_name: r.full_name, name: r.name,
         description: r.description, owner: r.owner, repo: r.repo,
         avatar_url: r.avatar_url || '', stars: r.stars || 0,
@@ -112,9 +126,7 @@ export default function SearchTab() {
       }));
       setResults(items);
     } catch (e: any) {
-      // 捕获所有异常并显示，确保不会静默显示"无结果"
-      const msg = e?.message || e?.toString() || '搜索失败，请重试';
-      setError(msg);
+      setError(e?.message || e?.toString() || '搜索失败，请重试');
     } finally {
       setLoading(false);
     }
