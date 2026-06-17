@@ -33,7 +33,6 @@ export default function RankingsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [localRanks, setLocalRanks] = useState<{ app_id: number; score: number; views: number; downloads: number; favorites: number; app_name?: string; owner?: string; repo?: string }[]>([]);
   const [popularKeywords, setPopularKeywords] = useState<{ keyword: string; count: number }[]>([]);
-  const [localApps, setLocalApps] = useState<Map<number, { name: string; owner: string; repo: string }>>(new Map());
 
   const loadLocalRanks = useCallback(async () => {
     try {
@@ -87,19 +86,13 @@ export default function RankingsScreen() {
 
       const { items } = await searchRepos(query, { page: 1, per_page: 20, sort, installableOnly: true });
       setApps(items);
-      
-      const newLocalApps = new Map(localApps);
-      items.forEach((app) => {
-        newLocalApps.set(app.id, { name: app.name, owner: app.owner, repo: app.repo });
-      });
-      setLocalApps(newLocalApps);
     } catch (e) {
       console.warn('榜单加载失败', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [activeRank, localApps]);
+  }, [activeRank]);
 
   useEffect(() => {
     loadLocalRanks();
