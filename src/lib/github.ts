@@ -153,9 +153,13 @@ async function _fetchAndFilter(
     return { items: installable, total_count: raw.total_count, filtered: true }
   }
 
-  // installable.length===0：无论是超时还是限速全返回 ok:false，
-  // 都无法可靠区分"真没安装包"与"限速误报"，统一兜底展示原列表（不入缓存）
-  return { items: raw.items, total_count: raw.total_count, filtered: false }
+  // 区分「超时/限速」和「真正没有安装包」：
+  // - timedOut=true：enrichApps 网络超时，无法判断，兜底展示原列表（不入缓存）
+  // - timedOut=false：enrichApps 正常完成但全部 ok:false，说明这批结果真的没有安装包，返回空
+  if (timedOut) {
+    return { items: raw.items, total_count: raw.total_count, filtered: false }
+  }
+  return { items: [], total_count: raw.total_count, filtered: true }
 }
 
 async function _fetchSearchRepos(
