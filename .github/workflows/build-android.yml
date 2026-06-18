@@ -57,16 +57,14 @@ jobs:
           import json
           with open('app.json', 'r') as f:
               data = json.load(f)
-          # versionCode = run_number（单调递增整数）
-          data['expo']['android']['versionCode'] = ${{ github.run_number }}
-          # version patch 自动递增：1.0.0 → 1.0.1 → 1.0.2 ...
-          ver = data['expo'].get('version', '1.0.0').split('.')
-          ver[2] = str(int(ver[2]) + 1)
-          new_ver = '.'.join(ver)
-          data['expo']['version'] = new_ver
+          run = ${{ github.run_number }}
+          # versionCode = run_number（单调递增，Android 覆盖安装依赖此字段）
+          data['expo']['android']['versionCode'] = run
+          # version = 1.0.{run_number}，每次构建唯一，永不重复
+          data['expo']['version'] = f'1.0.{run}'
           with open('app.json', 'w') as f:
               json.dump(data, f, indent=2, ensure_ascii=False)
-          print(f'version={new_ver}  versionCode=${{ github.run_number }}')
+          print(f'version=1.0.{run}  versionCode={run}')
           "
 
       - name: Expo prebuild (generate android/)
