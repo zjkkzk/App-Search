@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "cover",
-      "backgroundColor": "#FCFDFC"
+      "backgroundColor": "#F8FBFF"
     },
     "ios": {
       "supportsTablet": true,
@@ -22,9 +22,14 @@
       }
     },
     "android": {
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "cover",
+        "backgroundColor": "#F8FBFF"
+      },
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#F5F6F8"
+        "backgroundColor": "#F8FBFF"
       },
       "predictiveBackGestureEnabled": true,
       "versionCode": 1,
