@@ -2,16 +2,16 @@
   "expo": {
     "name": "开源应用商店",
     "slug": "open-app-store",
-    "version": "1.0.0",
+    "version": "1.0.204",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "openappstore",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F5F6F8"
+      "image": "./assets/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#1A1A22"
     },
     "ios": {
       "supportsTablet": true,
