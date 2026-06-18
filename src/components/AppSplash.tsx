@@ -42,17 +42,15 @@ export default function AppSplash() {
   const dot2Opacity = dotsAnim.interpolate({ inputRange: [0, 0.33, 0.66, 1], outputRange: [0.25, 0.25, 1, 0.25] });
   const dot3Opacity = dotsAnim.interpolate({ inputRange: [0, 0.33, 0.66, 1], outputRange: [0.25, 0.25, 0.25, 1] });
 
-  // 图标尺寸：屏幕宽度的 40%，最大 160px
-  const iconSize = Math.min(width * 0.4, 160);
-
   return (
     <View style={[styles.container, { width, height }]}>
-      <Animated.View style={[styles.content, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
-        <SvgXml xml={APP_ICON_SVG} width={iconSize} height={iconSize} />
-        <Text style={styles.appName}>开源应用商店</Text>
-        <Text style={styles.tagline}>发现精彩开源应用</Text>
+      {/* Logo 铺满全屏宽度（100%），与文字区域垂直居中 */}
+      <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
+        <SvgXml xml={APP_ICON_SVG} width={width} height={width} />
+        <Text style={styles.explore}>探索开源世界</Text>
       </Animated.View>
 
+      {/* 底部加载点 */}
       <View style={styles.footer}>
         <View style={styles.dotsRow}>
           <Animated.View style={[styles.dot, { opacity: dot1Opacity }]} />
@@ -76,20 +74,13 @@ const styles = StyleSheet.create({
   },
   content: {
     alignItems: 'center',
-    marginTop: -40,
   },
-  appName: {
-    marginTop: 20,
-    fontSize: 22,
-    fontWeight: '700',
+  explore: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: '600',
     color: '#555555',
-    letterSpacing: 2,
-  },
-  tagline: {
-    marginTop: 6,
-    fontSize: 12,
-    color: '#AAAAAA',
-    letterSpacing: 3,
+    letterSpacing: 4,
   },
   footer: {
     position: 'absolute',
