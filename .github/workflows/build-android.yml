@@ -142,69 +142,86 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-${{ github.sha }}
+          name: app-release-${{ github.run_number }}
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
 
-      # ── 每次 push main：发布正式版 Release（覆盖 latest） ─────────────────
-      - name: Rename APK with commit SHA (main push)
+      # ── 找到构建产物，统一校验 APK 存在 ─────────────────────────────────
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            echo "❌ APK not found!" && exit 1
+          fi
+          echo "path=$APK" >> $GITHUB_OUTPUT
+          echo "✅ APK: $APK ($(du -sh "$APK" | cut -f1))"
+
+      # ── push main：滚动更新 latest Release ──────────────────────────────
+      - name: Rename APK for latest release
         if: github.ref == 'refs/heads/main'
+        id: rename_latest
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           DATE=$(date +'%Y%m%d')
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
-          echo "Found APK: $APK"
-          mv "$APK" android/app/build/outputs/apk/release/openappstore-${DATE}-${SHORT_SHA}.apk
-          echo "Renamed to: openappstore-${DATE}-${SHORT_SHA}.apk"
+          DEST="android/app/build/outputs/apk/release/openappstore-${DATE}-${SHORT_SHA}.apk"
+          mv "${{ steps.apk.outputs.path }}" "$DEST"
+          echo "name=openappstore-${DATE}-${SHORT_SHA}.apk" >> $GITHUB_OUTPUT
+          echo "path=$DEST" >> $GITHUB_OUTPUT
 
-      - name: Delete old latest release + tag (main push)
+      - name: Publish latest Release (main push)
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 删除旧 release（忽略不存在时的错误）
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/latest --jq '.id' 2>/dev/null || echo "")
-          if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
-            gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID || true
-            echo "Deleted release id=$RELEASE_ID"
-          fi
-          # 删除旧 tag
-          gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/latest 2>/dev/null || true
-          echo "Deleted tag latest (if existed)"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DATE=$(date +'%Y%m%d')
+          APK="${{ steps.rename_latest.outputs.path }}"
+          COMMIT_MSG=$(git log -1 --pretty=%s)
 
-      - name: Publish stable release (main push)
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: "Latest Stable Build"
-          prerelease: false
-          make_latest: true
-          body: |
-            ✅ **正式构建** — main 分支最新稳定版 APK
+          # 原子操作：先删旧 Release + Tag，再创建新的
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
 
-            - Commit: [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-            - 构建时间：${{ github.event.head_commit.timestamp }}
-            - 消息：${{ github.event.head_commit.message }}
-          files: android/app/build/outputs/apk/release/*.apk
+          gh release create latest "$APK" \
+            --title "Latest Stable — ${DATE} (${SHORT_SHA})" \
+            --notes "$(cat <<'NOTES'
+          ✅ **main 分支最新稳定构建**
 
-      # ── push v* 标签：创建正式版本 Release ───────────────────────────────
-      - name: Rename APK with version tag
+          | 字段 | 值 |
+          |------|-----|
+          | Commit | [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+          | 构建编号 | #${{ github.run_number }} |
+          | 提交信息 | '"$COMMIT_MSG"' |
+          | 构建时间 | '"$(date -u +'%Y-%m-%d %H:%M UTC')"' |
+
+          > 此 Release 始终对应 main 分支最新成功构建，旧版 APK 请在 [Actions Artifacts](/${{ github.repository }}/actions) 中获取。
+          NOTES
+          )" \
+            --target "${{ github.sha }}" \
+            --latest
+
+      # ── push v* 标签：创建带版本号的正式 Release ────────────────────────
+      - name: Rename APK for versioned release
         if: startsWith(github.ref, 'refs/tags/v')
+        id: rename_versioned
         run: |
-          TAG=${{ github.ref_name }}
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
-          echo "Found APK: $APK"
-          mv "$APK" android/app/build/outputs/apk/release/openappstore-${TAG}.apk
-          echo "Renamed to: openappstore-${TAG}.apk"
+          TAG="${{ github.ref_name }}"
+          DEST="android/app/build/outputs/apk/release/openappstore-${TAG}.apk"
+          mv "${{ steps.apk.outputs.path }}" "$DEST"
+          echo "path=$DEST" >> $GITHUB_OUTPUT
 
-      - name: Create versioned GitHub Release (tag push)
+      - name: Create versioned Release (tag push)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          make_latest: true
-          files: android/app/build/outputs/apk/release/*.apk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          APK="${{ steps.rename_versioned.outputs.path }}"
+
+          gh release create "$TAG" "$APK" \
+            --title "Release ${TAG}" \
+            --generate-notes \
+            --latest
 
 
 
