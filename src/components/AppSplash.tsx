@@ -68,7 +68,8 @@ export default function AppSplash() {
   });
 
   return (
-    <View style={styles.container}>
+    // absoluteFillObject 保证铺满全屏，不依赖父容器是否提供 flex
+    <View style={[styles.container, { width, height }]}>
       {/* 顶部装饰弧线 — 尺寸依赖运行时 width/height，用内联样式 */}
       <View style={[styles.arcTop, {
         top: -height * 0.25,
@@ -95,8 +96,7 @@ export default function AppSplash() {
         <Text style={styles.appName}>开源应用商店</Text>
 
         {/* 标语 */}
-        <Text style={styles.tagline}>{TAGLINE}</Text>
-      </Animated.View>
+        <Text style={styles.tagline}>{TAGLINE}</Text>      </Animated.View>
 
       {/* 底部加载指示器 */}
       <View style={styles.footer}>
@@ -112,14 +112,16 @@ export default function AppSplash() {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F5F6F8',
+    backgroundColor: '#0D3578',
   },
   arcTop: {
     position: 'absolute',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
   content: {
     alignItems: 'center',
@@ -152,13 +154,13 @@ const styles = StyleSheet.create({
     marginTop: 24,
     fontSize: 26,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#FFFFFF',
     letterSpacing: 2,
   },
   tagline: {
     marginTop: 8,
     fontSize: 13,
-    color: '#999999',
+    color: 'rgba(255,255,255,0.7)',
     letterSpacing: 3,
   },
   footer: {
@@ -174,6 +176,6 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#1677FF',
+    backgroundColor: 'rgba(255,255,255,0.8)',
   },
 });
