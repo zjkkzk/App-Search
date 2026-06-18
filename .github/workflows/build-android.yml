@@ -51,16 +51,22 @@ jobs:
           [ -n "$_KEY" ] && echo "EXPO_PUBLIC_SUPABASE_ANON_KEY=$_KEY" >> .env || true
           [ -n "$_AID" ] && echo "EXPO_PUBLIC_APP_ID=$_AID"          >> .env || true
 
-      - name: Set versionCode = run_number (auto-increment)
+      - name: Set versionCode + auto-increment patch version
         run: |
           python3 -c "
-          import json, sys
+          import json
           with open('app.json', 'r') as f:
               data = json.load(f)
+          # versionCode = run_number（单调递增整数）
           data['expo']['android']['versionCode'] = ${{ github.run_number }}
+          # version patch 自动递增：1.0.0 → 1.0.1 → 1.0.2 ...
+          ver = data['expo'].get('version', '1.0.0').split('.')
+          ver[2] = str(int(ver[2]) + 1)
+          new_ver = '.'.join(ver)
+          data['expo']['version'] = new_ver
           with open('app.json', 'w') as f:
               json.dump(data, f, indent=2, ensure_ascii=False)
-          print(f'versionCode set to ${{ github.run_number }}')
+          print(f'version={new_ver}  versionCode=${{ github.run_number }}')
           "
 
       - name: Expo prebuild (generate android/)
