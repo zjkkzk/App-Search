@@ -48,7 +48,6 @@
       "expo-file-system",
       "expo-sharing",
       "expo-splash-screen",
-      "expo-notifications",
       "@react-native-async-storage/expo-with-async-storage",
       "./plugins/withAndroidABIFilter"
     ],

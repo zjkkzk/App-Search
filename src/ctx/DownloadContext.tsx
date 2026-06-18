@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import * as DM from '@/lib/downloadManager';
-import { showDownloadProgress, showDownloadComplete, showDownloadFailed, dismissNotification } from '@/lib/notifications';
+import { useNotification } from '@/lib/notifications';
 import type { DownloadTask } from '@/lib/downloadManager';
 
 interface DownloadContextValue {
@@ -31,8 +31,10 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<DownloadTask[]>(() => DM.getAllTasks());
   const pendingRef = useRef(false);
   const safRequestedRef = useRef(false);
-  // 追踪上次通知状态，避免重复通知
-  const lastNotifState = useRef<Map<string, string>>(new Map());
+  const notif = useNotification();
+  // 追踪每个任务的通知 ID 和上次状态
+  const notifIdMap = useRef<Map<string, string>>(new Map());
+  const lastNotifState = useRef<Map<string, { status: string; progress: number }>>(new Map());
 
   useEffect(() => {
     const unsubscribe = DM.subscribe((task) => {
@@ -41,22 +43,59 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // 通知系统：仅在 Native 端发送
+      // 通知系统：仅在 Native 端，使用应用内横幅
       if (Platform.OS !== 'web') {
-        const prevState = lastNotifState.current.get(task.id);
-        const stateKey = `${task.status}_${Math.round(task.progress * 100)}`;
+        const prev = lastNotifState.current.get(task.id);
+        const prevKey = prev ? `${prev.status}_${Math.round(prev.progress * 10)}` : '';
+        const currKey = `${task.status}_${Math.round(task.progress * 10)}`;
 
-        if (stateKey !== prevState) {
-          lastNotifState.current.set(task.id, stateKey);
+        if (currKey !== prevKey) {
+          lastNotifState.current.set(task.id, { status: task.status, progress: task.progress });
 
           if (task.status === 'downloading' && task.progress > 0) {
-            showDownloadProgress(task).catch(() => {});
+            const progressPercent = Math.round(task.progress * 100);
+            const existingId = notifIdMap.current.get(task.id);
+            if (existingId) {
+              notif.update(existingId, {
+                title: `正在下载 ${task.appName}`,
+                body: `${progressPercent}%${task.speed > 0 ? ` · ${task.speed < 1024 * 1024 ? `${(task.speed / 1024).toFixed(0)} KB/s` : `${(task.speed / 1024 / 1024).toFixed(1)} MB/s`}` : ''}`,
+                progress: task.progress,
+              });
+            } else {
+              const nid = notif.show({
+                type: 'progress',
+                title: `正在下载 ${task.appName}`,
+                body: `${progressPercent}%`,
+                progress: task.progress,
+                duration: 0,
+              });
+              notifIdMap.current.set(task.id, nid);
+            }
           } else if (task.status === 'completed') {
-            showDownloadComplete(task).catch(() => {});
+            const existingId = notifIdMap.current.get(task.id);
+            if (existingId) { notif.dismiss(existingId); notifIdMap.current.delete(task.id); }
+            notif.show({
+              type: 'success',
+              title: '下载完成',
+              body: task.appName,
+              duration: 3000,
+            });
           } else if (task.status === 'failed') {
-            showDownloadFailed(task).catch(() => {});
+            const existingId = notifIdMap.current.get(task.id);
+            if (existingId) { notif.dismiss(existingId); notifIdMap.current.delete(task.id); }
+            notif.show({
+              type: 'error',
+              title: '下载失败',
+              body: task.error || '请重试',
+              duration: 5000,
+              action: {
+                label: '重试',
+                onPress: () => { DM.retry(task.id); setTasks(DM.getAllTasks()); },
+              },
+            });
           } else if (task.status === 'cancelled') {
-            dismissNotification(task.id).catch(() => {});
+            const existingId = notifIdMap.current.get(task.id);
+            if (existingId) { notif.dismiss(existingId); notifIdMap.current.delete(task.id); }
           }
         }
       }

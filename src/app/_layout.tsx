@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, Text, Pressable, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
+import { NotificationProvider } from '@/lib/notifications';
 import "../global.css";
 
 // 仅在 Native 端阻止启动屏自动隐藏（Web 端该 API 是空操作，不会出错）
@@ -60,26 +61,26 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <ErrorBoundary>
-      <SafeAreaProvider style={{ flex: 1 }}>
-        <StatusBar style="dark" backgroundColor="transparent" translucent={Platform.OS === 'android'} />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            // 原生滑入动画，Web 保持 none
-            animation: Platform.OS === 'android' ? 'fade_from_bottom' : Platform.OS === 'ios' ? 'default' : 'none',
-            // Android 13+ 预测性返回手势
-            gestureEnabled: true,
-          }}
-        >
-          <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
-          <Stack.Screen name="detail" />
-          <Stack.Screen name="downloads" />
-          <Stack.Screen name="favorites" />
-          <Stack.Screen name="search-history" />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-      </SafeAreaProvider>
-    </ErrorBoundary>
+    <NotificationProvider>
+      <ErrorBoundary>
+        <SafeAreaProvider style={{ flex: 1 }}>
+          <StatusBar style="dark" backgroundColor="transparent" translucent={Platform.OS === 'android'} />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              animation: Platform.OS === 'android' ? 'fade_from_bottom' : Platform.OS === 'ios' ? 'default' : 'none',
+              gestureEnabled: true,
+            }}
+          >
+            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+            <Stack.Screen name="detail" />
+            <Stack.Screen name="downloads" />
+            <Stack.Screen name="favorites" />
+            <Stack.Screen name="search-history" />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+        </SafeAreaProvider>
+      </ErrorBoundary>
+    </NotificationProvider>
   );
 }
