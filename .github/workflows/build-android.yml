@@ -152,8 +152,10 @@ jobs:
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           DATE=$(date +'%Y%m%d')
-          mv android/app/build/outputs/apk/release/app-release.apk \
-             android/app/build/outputs/apk/release/openappstore-${DATE}-${SHORT_SHA}.apk
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "Found APK: $APK"
+          mv "$APK" android/app/build/outputs/apk/release/openappstore-${DATE}-${SHORT_SHA}.apk
+          echo "Renamed to: openappstore-${DATE}-${SHORT_SHA}.apk"
 
       - name: Delete old latest release + tag (main push)
         if: github.ref == 'refs/heads/main'
@@ -191,8 +193,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           TAG=${{ github.ref_name }}
-          mv android/app/build/outputs/apk/release/app-release.apk \
-             android/app/build/outputs/apk/release/openappstore-${TAG}.apk
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "Found APK: $APK"
+          mv "$APK" android/app/build/outputs/apk/release/openappstore-${TAG}.apk
+          echo "Renamed to: openappstore-${TAG}.apk"
 
       - name: Create versioned GitHub Release (tag push)
         if: startsWith(github.ref, 'refs/tags/v')
