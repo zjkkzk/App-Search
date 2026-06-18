@@ -23,6 +23,7 @@ export default function ProfileTab() {
 
   const [token, setTokenState] = useState('');
   const [tokenExpanded, setTokenExpanded] = useState(false);
+  const [aboutExpanded, setAboutExpanded] = useState(false);
   const tokenInputRef = useRef<TextInput>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -182,20 +183,14 @@ export default function ProfileTab() {
         </View>
 
 
-        {/* 功能入口 */}
+        {/* 功能入口（顺序：下载管理 → 收藏 → API配额 → 清除缓存） */}
         <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
+          <Row icon="download-outline" iconColor="#1677FF" label="下载管理"
+            value={`${dlCount} 条${activeCount > 0 ? ` · ${activeCount} 进行中` : ''}`}
+            onPress={() => router.push('/downloads' as any)} />
+          <Divider />
           <Row icon="heart-outline" iconColor="#FF4D88" label="我的收藏" value={`${favCount} 个`}
             onPress={() => router.push('/favorites' as any)} />
-          <Divider />
-          <Row icon="download-outline" iconColor="#1677FF" label="下载管理" value={`${dlCount} 条${activeCount > 0 ? ` · ${activeCount} 进行中` : ''}`}
-            onPress={() => router.push('/downloads' as any)} />
-          {dlCount > 0 && (
-            <>
-              <Divider />
-              <Row icon="trash-outline" iconColor="#f5222d" label="清空下载记录" danger
-                onPress={() => setConfirmTarget('downloads')} trailingIcon="trash-outline" />
-            </>
-          )}
           <Divider />
           <Row icon="flash-outline" iconColor={rateColor} label="API 配额"
             value={`${rateLimit.remaining}/${rateLimit.limit}  重置 ${resetTime}`}
@@ -210,6 +205,13 @@ export default function ProfileTab() {
             onPress={() => setConfirmTarget('cache')}
             trailingIcon="trash-outline"
           />
+          {dlCount > 0 && (
+            <>
+              <Divider />
+              <Row icon="trash-outline" iconColor="#f5222d" label="清空下载记录" danger
+                onPress={() => setConfirmTarget('downloads')} trailingIcon="trash-outline" />
+            </>
+          )}
         </View>
 
         {/* Token 管理 */}
@@ -279,34 +281,50 @@ export default function ProfileTab() {
           )}
         </View>
 
-        {/* 关于 */}
+        {/* 关于（折叠布局） */}
         <SectionTitle title="关于" />
         <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
-          {([
-            { label: '应用版本', value: '1.0.0', onPress: undefined },
-            { label: '数据来源', value: 'GitHub API', onPress: undefined },
-            { label: '运行平台', value: Platform.OS, onPress: undefined },
-            { label: '项目仓库', value: 'GitHub', onPress: () => Linking.openURL('https://github.com/qq5855144/App-Search') },
-          ] as const).map((item, i, arr) => (
-            <React.Fragment key={item.label}>
-              <Pressable
-                onPress={item.onPress}
-                disabled={!item.onPress}
-                android_ripple={{ color: '#F0F0F0' }}
-                style={{
-                  flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                  paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#fff',
-                }}
-              >
-                <Text style={{ color: '#555', fontSize: 14 }}>{item.label}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={{ color: '#1A1A1A', fontSize: 14, fontWeight: '500' }}>{item.value}</Text>
-                  {item.onPress && <Ionicons name="open-outline" size={14} color="#AAA" />}
-                </View>
-              </Pressable>
-              {i < arr.length - 1 && <Divider />}
-            </React.Fragment>
-          ))}
+          {/* 折叠头 */}
+          <Pressable
+            onPress={() => setAboutExpanded((v) => !v)}
+            android_ripple={{ color: '#F0F0F0' }}
+            style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 10 }}
+          >
+            <Ionicons name="information-circle-outline" size={20} color="#1677FF" />
+            <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>关于应用</Text>
+            <Ionicons name={aboutExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#BBB" />
+          </Pressable>
+
+          {/* 展开内容 */}
+          {aboutExpanded && (
+            <View style={{ borderTopWidth: 0.5, borderTopColor: '#F0F0F0' }}>
+              {([
+                { label: '应用版本', value: '1.0.0', onPress: undefined },
+                { label: '数据来源', value: 'GitHub API', onPress: undefined },
+                { label: '运行平台', value: Platform.OS, onPress: undefined },
+                { label: '项目仓库', value: 'GitHub', onPress: () => Linking.openURL('https://github.com/qq5855144/App-Search') },
+              ] as const).map((item, i, arr) => (
+                <React.Fragment key={item.label}>
+                  <Pressable
+                    onPress={item.onPress}
+                    disabled={!item.onPress}
+                    android_ripple={{ color: '#F0F0F0' }}
+                    style={{
+                      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                      paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#fff',
+                    }}
+                  >
+                    <Text style={{ color: '#555', fontSize: 14 }}>{item.label}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text style={{ color: '#1A1A1A', fontSize: 14, fontWeight: '500' }}>{item.value}</Text>
+                      {item.onPress && <Ionicons name="open-outline" size={14} color="#AAA" />}
+                    </View>
+                  </Pressable>
+                  {i < arr.length - 1 && <Divider />}
+                </React.Fragment>
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
