@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -6,6 +6,7 @@ import { View, Text, Pressable, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
+import AppSplash from '@/components/AppSplash';
 import "../global.css";
 
 // 仅在 Native 端阻止启动屏自动隐藏（Web 端该 API 是空操作，不会出错）
@@ -49,16 +50,28 @@ class ErrorBoundary extends React.Component<
 }
 
 export default function RootLayout() {
+  const [ready, setReady] = useState(false);
+
   useEffect(() => {
     // 初始化 Token，完成后隐藏启动屏
     initToken()
       .catch(() => {})
       .finally(() => {
-        if (Platform.OS !== 'web') {
-          SplashScreen.hideAsync().catch(() => {});
-        }
+        // 先显示自定义启动图，等一帧确保渲染后再隐藏原生启动屏
+        setReady(true);
+        // 延迟一帧隐藏原生启动屏，避免闪现白屏
+        requestAnimationFrame(() => {
+          if (Platform.OS !== 'web') {
+            SplashScreen.hideAsync().catch(() => {});
+          }
+        });
       });
   }, []);
+
+  // Web 端跳过自定义启动图
+  if (!ready && Platform.OS !== 'web') {
+    return <AppSplash />;
+  }
 
   return (
     <ErrorBoundary>
