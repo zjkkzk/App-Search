@@ -77,17 +77,22 @@ function rowToAppItem(r: any): AppItem {
  * 查询参数（统一接口）
  */
 export interface CatalogQuery {
-  platform?: string;      // 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux'
-  topic?: string;         // topic 关键词，如 'developer-tools'
+  platform?: string;               // 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux' | '全平台'
+  topic?: string;                  // 单 topic（兼容旧调用）
+  topics?: string[];               // 多 topic OR 匹配
+  language?: string;               // 编程语言，如 'TypeScript' | 'Kotlin'
+  min_stars?: number;              // 最低 star 数
+  has_installable_assets?: boolean;// 是否只返回有安装包的项目（默认 true）
   sort?: 'stars' | 'updated' | 'forks' | 'downloads';
   page?: number;
   per_page?: number;
-  q?: string;             // 全文搜索词
+  q?: string;                      // 全文搜索词
 }
 
 export interface CatalogResult {
   items: AppItem[];
   total_count: number;
+  server_total?: number;           // 服务端命中总数（区别于分页总数）
   error?: string;
 }
 
@@ -104,6 +109,10 @@ export async function queryCatalog(opts: CatalogQuery): Promise<CatalogResult> {
   const {
     platform,
     topic,
+    topics,
+    language,
+    min_stars,
+    has_installable_assets = true,
     sort = 'stars',
     page = 1,
     per_page = 20,
@@ -112,62 +121,73 @@ export async function queryCatalog(opts: CatalogQuery): Promise<CatalogResult> {
 
   const offset = (page - 1) * per_page;
 
-  console.log('[Catalog] Query:', { platform, topic, sort, page, q: q || '(none)' });
-
-  // === 1. 基础查询：只查有安装包的项目 ===
+  // === 1. 基础查询 ===
   let query = supabase
     .from('app_catalog')
     .select('*', { count: 'exact' })
-    .not('latest_version', 'is', null)  // 必须有安装包
-    .eq('archived', false);              // 不展示归档项目
+    .eq('archived', false);
+
+  // 安装包过滤（默认开启）
+  if (has_installable_assets !== false) {
+    query = query.not('latest_version', 'is', null);
+  }
 
   // === 2. 平台过滤 ===
   if (platform && platform !== '全平台') {
     query = query.contains('platforms', [platform]);
   }
 
-  // === 3. Topic 过滤 ===
-  if (topic) {
-    query = query.contains('topics', [topic]);
+  // === 3. 编程语言过滤 ===
+  if (language && language !== '全部') {
+    query = query.ilike('language', language);
   }
 
-  // === 4. 全文搜索（关键词匹配 name / repo / full_name / description / owner）===
+  // === 4. 最低 star 数 ===
+  if (typeof min_stars === 'number' && min_stars > 0) {
+    query = query.gte('stars', min_stars);
+  }
+
+  // === 5. Topic 过滤：数组 OR 或单值兼容 ===
+  const topicList: string[] = Array.isArray(topics) && topics.length > 0
+    ? topics
+    : topic ? [topic] : [];
+
+  if (topicList.length === 1) {
+    query = query.contains('topics', [topicList[0]]);
+  } else if (topicList.length > 1) {
+    const orClauses = topicList.map((t) => `topics.cs.{${t}}`).join(',');
+    query = query.or(orClauses);
+  }
+
+  // === 6. 全文搜索 ===
   if (q && q.trim()) {
-    const term = q.trim();
-    // 使用 OR 进行多字段模糊匹配
-    // Supabase postgREST 的 or 语法：
-    // .or('col1.ilike.%term%,col2.ilike.%term%')
-    const safeTerm = term.replace(/'/g, "''");
+    const safeTerm = q.trim().replace(/'/g, "''");
     query = query.or(
       `name.ilike.%${safeTerm}%,repo.ilike.%${safeTerm}%,full_name.ilike.%${safeTerm}%,description.ilike.%${safeTerm}%,owner.ilike.%${safeTerm}%`
     );
   }
 
-  // === 5. 排序 ===
+  // === 7. 排序 ===
   const sortMap: Record<string, string> = {
     stars: 'stars',
     updated: 'updated_at',
     forks: 'forks',
     downloads: 'total_downloads',
   };
-  const sortCol = sortMap[sort] || 'stars';
-  query = query.order(sortCol, { ascending: false });
+  query = query.order(sortMap[sort] || 'stars', { ascending: false });
 
-  // === 6. 分页 ===
+  // === 8. 分页 ===
   query = query.range(offset, offset + per_page - 1);
 
-  // === 7. 执行 ===
+  // === 9. 执行 ===
   try {
     const { data, error, count } = await query;
-
     if (error) {
       console.error('[Catalog] Query ERROR:', error.message, error.code);
       return { items: [], total_count: 0, error: error.message };
     }
-
     const items = (data || []).map(rowToAppItem);
-    console.log('[Catalog] Returned:', items.length, '/ total:', count);
-    return { items, total_count: count || 0 };
+    return { items, total_count: count || 0, server_total: count || 0 };
   } catch (e: any) {
     console.error('[Catalog] Unexpected ERROR:', e?.message || e);
     return { items: [], total_count: 0, error: e?.message || '查询失败' };
