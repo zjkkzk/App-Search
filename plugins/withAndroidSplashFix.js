@@ -22,11 +22,9 @@
  * 必须通过 require.resolve 找到实际路径再 require，否则 Gradle createExpoConfig 任务失败。
  */
 
-// pnpm 严格 hoist：使用 require.resolve 从 @expo/config-plugins 自身位置加载
-const configPluginsPath = require.resolve('@expo/config-plugins', {
-  paths: [__dirname + '/..'],
-});
-const { withDangerousMod } = require(configPluginsPath);
+// 必须通过 'expo/config-plugins' 而非 '@expo/config-plugins'
+// pnpm 严格 hoist 模式下，只有直接依赖 expo 可解析，@expo/config-plugins 不会被 hoist
+const { withDangerousMod } = require('expo/config-plugins');
 const path = require('path');
 const fs = require('fs');
 
