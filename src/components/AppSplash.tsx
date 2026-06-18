@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Platform } from 'react-native';
+import { View, Text, StyleSheet, Animated, Platform, Modal } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 
 // 原始应用图标 SVG（用户提供，192×192，背景色 #FCFDFC）
@@ -43,38 +43,46 @@ export default function AppSplash() {
   const dot3Opacity = dotsAnim.interpolate({ inputRange: [0, 0.33, 0.66, 1], outputRange: [0.25, 0.25, 0.25, 1] });
 
   return (
-    // absoluteFillObject = top/left/right/bottom:0，始终铺满真实屏幕
-    <View style={styles.container}>
-      <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-        {/* 应用图标 */}
-        <View style={styles.iconWrapper}>
-          <SvgXml xml={APP_ICON_SVG} width={ICON_SIZE} height={ICON_SIZE} />
-        </View>
-        <Text style={styles.appName}>开源应用商店</Text>
-        <Text style={styles.explore}>发现 · 搜索 · 玩乐</Text>
-      </Animated.View>
+    // Modal 渲染在独立原生视图层，完全脱离组件树，100% 全屏
+    // 不受任何父容器（DownloadProvider/ErrorBoundary/SafeAreaProvider）约束
+    <Modal
+      visible
+      transparent={false}
+      animationType="none"
+      statusBarTranslucent
+      hardwareAccelerated
+    >
+      <View style={styles.container}>
+        <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
+          {/* 应用图标 */}
+          <View style={styles.iconWrapper}>
+            <SvgXml xml={APP_ICON_SVG} width={ICON_SIZE} height={ICON_SIZE} />
+          </View>
+          <Text style={styles.appName}>开源应用商店</Text>
+          <Text style={styles.explore}>发现 · 搜索 · 玩乐</Text>
+        </Animated.View>
 
-      {/* 底部加载点 */}
-      <View style={styles.footer}>
-        <View style={styles.dotsRow}>
-          <Animated.View style={[styles.dot, { opacity: dot1Opacity }]} />
-          <Animated.View style={[styles.dot, { opacity: dot2Opacity }]} />
-          <Animated.View style={[styles.dot, { opacity: dot3Opacity }]} />
+        {/* 底部加载点 */}
+        <View style={styles.footer}>
+          <View style={styles.dotsRow}>
+            <Animated.View style={[styles.dot, { opacity: dot1Opacity }]} />
+            <Animated.View style={[styles.dot, { opacity: dot2Opacity }]} />
+            <Animated.View style={[styles.dot, { opacity: dot3Opacity }]} />
+          </View>
+          <Text style={styles.loadingText}>正在加载中…</Text>
         </View>
-        <Text style={styles.loadingText}>正在加载中…</Text>
       </View>
-    </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  // absoluteFillObject 等价于 top/left/right/bottom:0，不依赖任何父容器尺寸
+  // flex:1 在 Modal 内部即可铺满全屏（Modal 本身已全屏）
   container: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     backgroundColor: '#FCFDFC',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 9999,
   },
   content: {
     alignItems: 'center',
