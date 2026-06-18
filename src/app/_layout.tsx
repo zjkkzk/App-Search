@@ -53,13 +53,10 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // 初始化 Token，完成后隐藏启动屏
     initToken()
       .catch(() => {})
       .finally(() => {
-        // 先显示自定义启动图，等一帧确保渲染后再隐藏原生启动屏
         setReady(true);
-        // 延迟一帧隐藏原生启动屏，避免闪现白屏
         requestAnimationFrame(() => {
           if (Platform.OS !== 'web') {
             SplashScreen.hideAsync().catch(() => {});
@@ -68,11 +65,8 @@ export default function RootLayout() {
       });
   }, []);
 
-  // Web 端跳过自定义启动图
-  if (!ready && Platform.OS !== 'web') {
-    return <AppSplash />;
-  }
-
+  // 始终渲染完整布局，AppSplash 以绝对定位覆盖层叠在最上面
+  // 避免 early return 导致 Expo Router 容器限制 AppSplash 尺寸
   return (
     <ErrorBoundary>
       <DownloadProvider>
@@ -92,6 +86,8 @@ export default function RootLayout() {
             <Stack.Screen name="search-history" />
             <Stack.Screen name="+not-found" />
           </Stack>
+          {/* overlay：仅 Native 端、未就绪时显示，覆盖整个屏幕 */}
+          {!ready && Platform.OS !== 'web' && <AppSplash />}
         </SafeAreaProvider>
       </DownloadProvider>
     </ErrorBoundary>
