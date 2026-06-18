@@ -29,7 +29,6 @@ export default function SearchTab() {
   const [hotWords, setHotWords] = useState<string[]>([]);
   const [results, setResults] = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filtering, setFiltering] = useState(false); // 后台过滤阶段
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
@@ -68,9 +67,8 @@ export default function SearchTab() {
   }, [loadHistory, loadHotWords]));
 
   /**
-   * 两阶段搜索：
-   * 阶段1 — 立即展示原始结果（无过滤），消除等待感
-   * 阶段2 — 后台过滤，完成后静默更新列表
+   * 单阶段搜索：过滤完成后再展示，严格禁止展示无安装包项目
+   * 过滤超时（12s）时兜底保留已知可安装+状态未知条目，避免空结果
    */
   const performSearch = async (kw: string, pageNum = 1, isLoadMore = false) => {
     const k = kw.trim();
@@ -87,7 +85,7 @@ export default function SearchTab() {
 
     inputRef.current?.blur();
 
-    // 生成本次搜索 id，用于过滤过期回调
+    // 竞态防护：每次新搜索生成新 id
     const thisSearchId = ++searchIdRef.current;
 
     if (!isLoadMore) {
@@ -98,7 +96,6 @@ export default function SearchTab() {
       lastKeywordRef.current = k;
       setSearched(true);
       setLoading(true);
-      setFiltering(false);
       setError('');
       setResults([]);
       setPage(1);
@@ -109,56 +106,35 @@ export default function SearchTab() {
     }
 
     try {
-      // ── 阶段1：拿原始数据，立即展示 ──────────────────────────
+      // 拉取原始数据
       const raw = await fetchSearchReposRaw(k, {
         sort: 'stars', order: 'desc', page: pageNum, per_page: 50,
       });
-
-      // 搜索 id 过期（用户已发起新搜索），丢弃结果
       if (searchIdRef.current !== thisSearchId) return;
 
+      // 过滤：等待完成后再展示，12s 超时后兜底（保留已知可安装+未知状态，剔除已知无安装包）
+      const filtered = raw.items.length > 0
+        ? await filterInstallable(raw.items, 12000)
+        : [];
+      if (searchIdRef.current !== thisSearchId) return;
+
+      // 过滤结果完全为空时用原始列表兜底（极端情况：全部状态未知且超时）
+      const finalItems = filtered.length > 0 ? filtered : raw.items;
       const morePages = raw.total_count > pageNum * 50;
 
       if (!isLoadMore) {
-        setResults(raw.items);
+        setResults(finalItems);
         setTotalCount(raw.total_count);
         setHasMore(morePages);
-        setLoading(false);
       } else {
-        setResults((prev) => [...prev, ...raw.items]);
-        setHasMore(morePages);
-        setLoadingMore(false);
+        setResults((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id));
+          return [...prev, ...finalItems.filter((a) => !existingIds.has(a.id))];
+        });
+        setHasMore(morePages && finalItems.length > 0);
       }
       setPage(pageNum);
-
-      // ── 阶段2：后台过滤，完成后静默精化列表 ─────────────────
-      if (raw.items.length > 0) {
-        setFiltering(true);
-        filterInstallable(raw.items, 12000).then((filtered) => {
-          // 再次检查 id，防止过期
-          if (searchIdRef.current !== thisSearchId) return;
-          setFiltering(false);
-          // 过滤结果为空则保留原始列表（兜底，避免误杀）
-          if (filtered.length === 0) return;
-          if (!isLoadMore) {
-            setResults(filtered);
-          } else {
-            // 加载更多时，只精化本次新增部分
-            setResults((prev) => {
-              const existingIds = new Set(prev.slice(0, prev.length - raw.items.length).map((a) => a.id));
-              const filteredIds = new Set(filtered.map((a) => a.id));
-              return [
-                ...prev.slice(0, prev.length - raw.items.length),
-                ...filtered.filter((a) => !existingIds.has(a.id)),
-              ];
-            });
-          }
-          // 后台刷新热词
-          loadHotWords();
-        }).catch(() => {
-          if (searchIdRef.current === thisSearchId) setFiltering(false);
-        });
-      }
+      loadHotWords();
     } catch (e: any) {
       if (searchIdRef.current !== thisSearchId) return;
       setLoading(false);
@@ -167,6 +143,8 @@ export default function SearchTab() {
         setError('搜索暂不可用：' + (e?.message || '网络错误'));
       }
     } finally {
+      setLoading(false);
+      setLoadingMore(false);
       loadingRef.current = false;
     }
   };
@@ -186,9 +164,8 @@ export default function SearchTab() {
     setPage(1);
     setHasMore(false);
     setTotalCount(0);
-    setFiltering(false);
     lastKeywordRef.current = '';
-    searchIdRef.current++; // 作废所有后台过滤回调
+    searchIdRef.current++; // 作废所有进行中的请求回调
   };
 
   const tagStyle = {
@@ -287,14 +264,8 @@ export default function SearchTab() {
             <View style={{ paddingHorizontal: 16, paddingVertical: 8, gap: 4 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={{ fontSize: 13, color: '#888' }}>
-                  GitHub 共匹配 {totalCount > 0 ? totalCount.toLocaleString() : results.length} 个项目
+                  GitHub 共匹配 {totalCount > 0 ? totalCount.toLocaleString() : results.length} 个项目，已过滤无安装包
                 </Text>
-                {filtering && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <ActivityIndicator size="small" color="#1677FF" />
-                    <Text style={{ fontSize: 11, color: '#1677FF' }}>验证安装包…</Text>
-                  </View>
-                )}
               </View>
             </View>
           }
