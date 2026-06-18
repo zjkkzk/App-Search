@@ -126,7 +126,6 @@ export default function ProfileTab() {
   const { activeCount } = useDownload();
 
   const [token, setTokenState] = useState('');
-  const [tokenExpanded, setTokenExpanded] = useState(false);
   const [githubExpanded, setGithubExpanded] = useState(false);
   const [dataExpanded, setDataExpanded] = useState(false);
   const [aboutExpanded, setAboutExpanded] = useState(false);
@@ -309,72 +308,58 @@ export default function ProfileTab() {
 
               <Divider />
 
-              {/* Token 输入区 */}
+              {/* Token 输入区（直接展示，不再二次折叠） */}
               <View style={{ paddingHorizontal: 16, paddingBottom: 16, paddingTop: 10 }}>
                 <Text style={{ fontSize: 12, color: '#999', marginBottom: 10 }}>
                   配置 Personal Access Token 可将 API 限额提升至 5000 次/小时
                 </Text>
-                <Pressable
-                  onPress={() => setTokenExpanded((v) => !v)}
-                  android_ripple={{ color: '#F5F5F5' }}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: tokenExpanded ? 10 : 0 }}
-                >
-                  <Ionicons name="key-outline" size={15} color="#666" />
-                  <Text style={{ flex: 1, fontSize: 13, color: '#444', fontWeight: '500' }}>Personal Access Token</Text>
-                  <Ionicons name={tokenExpanded ? 'chevron-up' : 'chevron-down'} size={13} color="#BBB" />
-                </Pressable>
-
-                {tokenExpanded && (
-                  <>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F7F7F7',
-                      borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 10 }}>
-                      <TextInput
-                        ref={tokenInputRef}
-                        style={{ flex: 1, fontSize: 14, color: '#1A1A1A' } as any}
-                        value={token}
-                        onChangeText={setTokenState}
-                        placeholder="github_pat_..."
-                        placeholderTextColor="#C0C0C0"
-                        secureTextEntry={false}
-                        textContentType="none"
-                        autoComplete="off"
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                      />
-                    </View>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <Pressable
-                        onPress={handleSave}
-                        disabled={token.trim().length < 10 || saving}
-                        style={{ flex: 1, height: 40, borderRadius: 10,
-                          backgroundColor: token.trim().length >= 10 ? '#1677FF' : '#E8E8E8',
-                          alignItems: 'center', justifyContent: 'center' }}
-                      >
-                        {saving
-                          ? <ActivityIndicator color="#fff" size="small" />
-                          : <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>保存</Text>}
-                      </Pressable>
-                      <Pressable
-                        onPress={() => Linking.openURL('https://github.com/settings/tokens/new')}
-                        style={{ height: 40, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1,
-                          borderColor: '#D8D8D8', alignItems: 'center', justifyContent: 'center',
-                          flexDirection: 'row', gap: 4 }}
-                      >
-                        <Ionicons name="open-outline" size={13} color="#555" />
-                        <Text style={{ color: '#555', fontSize: 13 }}>创建</Text>
-                      </Pressable>
-                      {saved && (
-                        <Pressable
-                          onPress={() => setConfirmTarget('token')}
-                          style={{ height: 40, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1,
-                            borderColor: '#FFB3B3', alignItems: 'center', justifyContent: 'center' }}
-                        >
-                          <Text style={{ color: '#f5222d', fontSize: 13 }}>清除</Text>
-                        </Pressable>
-                      )}
-                    </View>
-                  </>
-                )}
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F7F7F7',
+                  borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 10 }}>
+                  <TextInput
+                    ref={tokenInputRef}
+                    style={{ flex: 1, fontSize: 14, color: '#1A1A1A' } as any}
+                    value={token}
+                    onChangeText={setTokenState}
+                    placeholder="github_pat_..."
+                    placeholderTextColor="#C0C0C0"
+                    secureTextEntry={false}
+                    textContentType="none"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Pressable
+                    onPress={handleSave}
+                    disabled={token.trim().length < 10 || saving}
+                    style={{ flex: 1, height: 40, borderRadius: 10,
+                      backgroundColor: token.trim().length >= 10 ? '#1677FF' : '#E8E8E8',
+                      alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {saving
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>保存</Text>}
+                  </Pressable>
+                  <Pressable
+                    onPress={() => Linking.openURL('https://github.com/settings/tokens/new')}
+                    style={{ height: 40, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1,
+                      borderColor: '#D8D8D8', alignItems: 'center', justifyContent: 'center',
+                      flexDirection: 'row', gap: 4 }}
+                  >
+                    <Ionicons name="open-outline" size={13} color="#555" />
+                    <Text style={{ color: '#555', fontSize: 13 }}>创建</Text>
+                  </Pressable>
+                  {saved && (
+                    <Pressable
+                      onPress={() => setConfirmTarget('token')}
+                      style={{ height: 40, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1,
+                        borderColor: '#FFB3B3', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Text style={{ color: '#f5222d', fontSize: 13 }}>清除</Text>
+                    </Pressable>
+                  )}
+                </View>
               </View>
             </View>
           )}
