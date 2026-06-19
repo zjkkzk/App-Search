@@ -3,7 +3,7 @@ import { Stack } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, Pressable, Platform, BackHandler } from 'react-native';
+import { View, Text, Pressable, Platform, BackHandler, Animated } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
@@ -54,9 +54,21 @@ export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
   const navigation = useNavigation();
-  /** 连按两次返回才退出（Android 系统返回键防误触） */
   const backPressCount = useRef(0);
   const backPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 退出提示 Toast
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showExitToast = () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    Animated.sequence([
+      Animated.timing(toastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+    toastTimer.current = setTimeout(() => {
+      Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start();
+    }, 1800);
+  };
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -67,35 +79,36 @@ export default function RootLayout() {
       .finally(() => setInitDone(true));
   }, []);
 
-  // Android 系统返回键：标准处理模式
-  // - 有页面可返回：主动调用 goBack()，return true 阻止系统默认行为
-  // - 已在根页面：2s 内连按两次才调用 exitApp() 退出
+  // Android 系统返回键标准处理
+  // - 有页面可返回：主动 goBack()
+  // - 已在根页面：第一次显示"再按一次退出"Toast，2s 内再按才 exitApp()
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      // 主动检查导航状态并执行返回（比 return false 更可靠）
       if (navigation.canGoBack()) {
         navigation.goBack();
-        return true; // 告知系统"已处理"，阻止默认退出行为
+        return true;
       }
-      // 已在根页面（Tabs）：防误触退出
       backPressCount.current += 1;
       if (backPressCount.current === 1) {
+        showExitToast();
         backPressTimer.current = setTimeout(() => {
           backPressCount.current = 0;
         }, 2000);
-        return true; // 拦截第一次按下
+        return true;
       }
-      // 第二次按下：清理计数，明确退出
       if (backPressTimer.current) clearTimeout(backPressTimer.current);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
       backPressCount.current = 0;
-      BackHandler.exitApp(); // 明确调用退出，不依赖系统 return false 行为
+      BackHandler.exitApp();
       return true;
     });
     return () => {
       sub.remove();
       if (backPressTimer.current) clearTimeout(backPressTimer.current);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation]);
 
   return (
@@ -124,6 +137,29 @@ export default function RootLayout() {
             initDone={initDone}
             onHidden={() => setShowSplash(false)}
           />
+        )}
+        {/* Android 退出提示 Toast（绝对定位，叠在所有内容上方） */}
+        {Platform.OS === 'android' && (
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              bottom: 60,
+              left: 0,
+              right: 0,
+              alignItems: 'center',
+              opacity: toastOpacity,
+            }}
+          >
+            <View style={{
+              backgroundColor: 'rgba(0,0,0,0.75)',
+              paddingHorizontal: 20,
+              paddingVertical: 10,
+              borderRadius: 24,
+            }}>
+              <Text style={{ color: '#fff', fontSize: 14 }}>再按一次退出应用</Text>
+            </View>
+          </Animated.View>
         )}
       </DownloadProvider>
     </ErrorBoundary>
