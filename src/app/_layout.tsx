@@ -7,6 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
 import AppSplash from '@/components/AppSplash';
+import { useAndroidNavigationBack } from '@/hooks/useAndroidNavigationBack';
 import "../global.css";
 
 // 仅在 Native 端阻止启动屏自动隐藏（Web 端该 API 是空操作，不会出错）
@@ -52,6 +53,9 @@ class ErrorBoundary extends React.Component<
 export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
+
+  // Android 系统返回键统一处理（JS 路由历史栈）
+  useAndroidNavigationBack();
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
