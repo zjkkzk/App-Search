@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, Pressable, Platform, BackHandler, ToastAndroid } from 'react-native';
@@ -52,7 +52,7 @@ class ErrorBoundary extends React.Component<
 export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
-  const router = useRouter();
+  // 用于 Android 双击返回退出的时间戳
   const lastBackTime = useRef(0);
 
   useEffect(() => {
@@ -63,30 +63,6 @@ export default function RootLayout() {
       .catch(() => {})
       .finally(() => setInitDone(true));
   }, []);
-
-  // Android 系统返回键统一处理
-  // expo-router 的 useRouter() 在根布局内有效，router.canGoBack() 能正确读取导航栈状态。
-  // 使用 subscription.remove() — RN 0.83 正确的清理方式（removeEventListener 已无效）。
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      // 有页面可返回（如详情/下载管理/收藏等子页面）：直接返回上一页
-      if (router.canGoBack()) {
-        router.back();
-        return true;
-      }
-      // 已在根页面（Tabs）：连按两次才退出，给出 Toast 提示
-      const now = Date.now();
-      if (now - lastBackTime.current < 2000) {
-        BackHandler.exitApp();
-        return true;
-      }
-      lastBackTime.current = now;
-      ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
-      return true;
-    });
-    return () => subscription.remove();
-  }, [router]);
 
   return (
     <ErrorBoundary>
@@ -100,7 +76,31 @@ export default function RootLayout() {
               gestureEnabled: true,
             }}
           >
-            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+            {/*
+              (tabs) 是根 Stack 的初始屏幕。
+              beforeRemove 仅在 Android 按返回键尝试弹出本屏幕时触发（且 action.type === 'GO_BACK'）。
+              子页面（detail/downloads/favorites 等）被压入 Stack 后，按返回键由 React Navigation
+              内置逻辑处理（弹出子页面），此 listener 不会触发，不干扰正常返回功能。
+            */}
+            <Stack.Screen
+              name="(tabs)"
+              options={{ animation: 'none' }}
+              listeners={{
+                beforeRemove: (e) => {
+                  // 只处理硬件/手势 GO_BACK，其他导航动作（replace/reset）不拦截
+                  if (e.data.action.type !== 'GO_BACK') return;
+                  e.preventDefault();
+                  if (Platform.OS !== 'android') return;
+                  const now = Date.now();
+                  if (now - lastBackTime.current < 2000) {
+                    BackHandler.exitApp();
+                    return;
+                  }
+                  lastBackTime.current = now;
+                  ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
+                },
+              }}
+            />
             <Stack.Screen name="detail" />
             <Stack.Screen name="downloads" />
             <Stack.Screen name="favorites" />
