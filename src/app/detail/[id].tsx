@@ -259,18 +259,6 @@ export default function DetailScreen() {
     if (router.canGoBack()) router.back();
     else router.replace('/(tabs)');
   };
-
-  // Android 硬件返回键 — useFocusEffect 确保仅在本页聚焦时生效，不与 Tabs 的退出逻辑冲突
-  useFocusEffect(
-    useCallback(() => {
-      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-        goBack();
-        return true;
-      });
-      return () => sub.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [router])
-  );
   const [app, setApp] = useState<AppItem | null>(null);
   const [releases, setReleases] = useState<GitHubRelease[]>([]);
   const [readme, setReadme] = useState('');

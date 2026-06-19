@@ -22,16 +22,6 @@ export default function SearchHistoryScreen() {
     }, [load])
   );
 
-  // Android 硬件返回键 — useFocusEffect 确保仅在本页聚焦时生效
-  useFocusEffect(useCallback(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (router.canGoBack()) router.back();
-      else router.replace('/(tabs)' as any);
-      return true;
-    });
-    return () => sub.remove();
-  }, [router]));
-
   const handleClear = async () => {
     await clearSearchHistory();
     setHistory([]);

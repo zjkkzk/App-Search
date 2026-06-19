@@ -137,16 +137,6 @@ export default function DownloadsScreen() {
     })();
   }, [tab]));
 
-  // Android 硬件返回键 — useFocusEffect 确保仅在本页聚焦时生效
-  useFocusEffect(useCallback(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (router.canGoBack()) router.back();
-      else router.replace('/(tabs)' as any);
-      return true;
-    });
-    return () => sub.remove();
-  }, [router]));
-
   // 切换到历史标签时加载
   useEffect(() => {
     if (tab === 'history') loadHistory();
