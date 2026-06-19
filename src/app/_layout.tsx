@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
+import { useNavigation } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, Pressable, Platform, BackHandler } from 'react-native';
@@ -52,7 +53,7 @@ class ErrorBoundary extends React.Component<
 export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
-  const router = useRouter();
+  const navigation = useNavigation();
   /** 连按两次返回才退出（Android 系统返回键防误触） */
   const backPressCount = useRef(0);
   const backPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,29 +67,36 @@ export default function RootLayout() {
       .finally(() => setInitDone(true));
   }, []);
 
-  // Android 系统返回键：只在导航栈根页面时拦截，避免直接退出
+  // Android 系统返回键：标准处理模式
+  // - 有页面可返回：主动调用 goBack()，return true 阻止系统默认行为
+  // - 已在根页面：2s 内连按两次才调用 exitApp() 退出
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      // 若 React Navigation 有页面可以回退，放行让 Stack 处理（不拦截）
-      if (router.canGoBack()) return false;
-      // 到达根页面（Tabs）：第一次按键拦截，2s 内第二次才真正退出
+      // 主动检查导航状态并执行返回（比 return false 更可靠）
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return true; // 告知系统"已处理"，阻止默认退出行为
+      }
+      // 已在根页面（Tabs）：防误触退出
       backPressCount.current += 1;
       if (backPressCount.current === 1) {
         backPressTimer.current = setTimeout(() => {
           backPressCount.current = 0;
         }, 2000);
-        return true; // 拦截，防止误触退出
+        return true; // 拦截第一次按下
       }
+      // 第二次按下：清理计数，明确退出
       if (backPressTimer.current) clearTimeout(backPressTimer.current);
       backPressCount.current = 0;
-      return false; // 第二次：放行，系统处理退出
+      BackHandler.exitApp(); // 明确调用退出，不依赖系统 return false 行为
+      return true;
     });
     return () => {
       sub.remove();
       if (backPressTimer.current) clearTimeout(backPressTimer.current);
     };
-  }, [router]);
+  }, [navigation]);
 
   return (
     <ErrorBoundary>
