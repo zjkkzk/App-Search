@@ -10,12 +10,11 @@
  * - 存储目录信息
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView } from 'react-native';
-import { useRouter } from 'expo-router';
+import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView, BackHandler } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
-import { useFocusEffect } from 'expo-router';
 import { useDownload } from '@/ctx/DownloadContext';
 import { formatSpeed, formatBytes, isInstallerFile } from '@/lib/downloadManager';
 import { getDownloadHistory, clearDownloadHistory } from '@/lib/database';
@@ -137,6 +136,16 @@ export default function DownloadsScreen() {
       if (tab === 'history') loadHistory();
     })();
   }, [tab]));
+
+  // Android 硬件返回键 — useFocusEffect 确保仅在本页聚焦时生效
+  useFocusEffect(useCallback(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)' as any);
+      return true;
+    });
+    return () => sub.remove();
+  }, [router]));
 
   // 切换到历史标签时加载
   useEffect(() => {

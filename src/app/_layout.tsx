@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, Pressable, Platform, BackHandler, ToastAndroid } from 'react-native';
+import { View, Text, Pressable, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
@@ -52,8 +52,6 @@ class ErrorBoundary extends React.Component<
 export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
-  // 用于 Android 双击返回退出的时间戳
-  const lastBackTime = useRef(0);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -76,31 +74,7 @@ export default function RootLayout() {
               gestureEnabled: true,
             }}
           >
-            {/*
-              (tabs) 是根 Stack 的初始屏幕。
-              beforeRemove 仅在 Android 按返回键尝试弹出本屏幕时触发（且 action.type === 'GO_BACK'）。
-              子页面（detail/downloads/favorites 等）被压入 Stack 后，按返回键由 React Navigation
-              内置逻辑处理（弹出子页面），此 listener 不会触发，不干扰正常返回功能。
-            */}
-            <Stack.Screen
-              name="(tabs)"
-              options={{ animation: 'none' }}
-              listeners={{
-                beforeRemove: (e) => {
-                  // 只处理硬件/手势 GO_BACK，其他导航动作（replace/reset）不拦截
-                  if (e.data.action.type !== 'GO_BACK') return;
-                  e.preventDefault();
-                  if (Platform.OS !== 'android') return;
-                  const now = Date.now();
-                  if (now - lastBackTime.current < 2000) {
-                    BackHandler.exitApp();
-                    return;
-                  }
-                  lastBackTime.current = now;
-                  ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
-                },
-              }}
-            />
+            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
             <Stack.Screen name="detail" />
             <Stack.Screen name="downloads" />
             <Stack.Screen name="favorites" />

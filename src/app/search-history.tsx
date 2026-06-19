@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Pressable, FlatList } from 'react-native';
+import { View, Text, Pressable, FlatList, BackHandler } from 'react-native';
 import { useCallback, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,6 +21,16 @@ export default function SearchHistoryScreen() {
       load();
     }, [load])
   );
+
+  // Android 硬件返回键 — useFocusEffect 确保仅在本页聚焦时生效
+  useFocusEffect(useCallback(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)' as any);
+      return true;
+    });
+    return () => sub.remove();
+  }, [router]));
 
   const handleClear = async () => {
     await clearSearchHistory();
