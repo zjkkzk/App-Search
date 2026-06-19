@@ -12,6 +12,7 @@ import PlatformTag from '@/components/openappstore/PlatformTag';
 import Marked, { Renderer } from 'react-native-marked';
 import { Image } from 'expo-image';
 import type { ImageStyle } from 'react-native';
+import { useDownload } from '@/ctx/DownloadContext';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -252,6 +253,7 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
 export default function DetailScreen() {
   const { owner, repo } = useLocalSearchParams<{ owner: string; repo: string }>();
   const router = useRouter();
+  const { enqueue, findByUrl } = useDownload();
   // 直接打开详情页时导航栈为空，canGoBack() 为 false → 回首页而非 back()
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -427,7 +429,14 @@ export default function DetailScreen() {
                             {/* 下载按钮 */}
                             <Pressable
                               onPress={async () => {
-                                // 记录下载历史，再打开链接（闭环修复）
+                                if (!app) return;
+                                // 检查是否已在下载队列
+                                const existing = findByUrl(asset.browser_download_url);
+                                if (existing && (existing.status === 'downloading' || existing.status === 'pending')) {
+                                  router.push('/downloads' as any);
+                                  return;
+                                }
+                                // 加入 App 内下载队列（不跳浏览器）
                                 addDownloadRecord({
                                   app_id: app.id,
                                   app_name: app.name,
@@ -440,7 +449,17 @@ export default function DetailScreen() {
                                   html_url: asset.browser_download_url,
                                 }).catch(() => {});
                                 addAppEvent({ event_type: 'download', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
-                                Linking.openURL(asset.browser_download_url);
+                                enqueue({
+                                  url: asset.browser_download_url,
+                                  filename: asset.name,
+                                  appId: app.id,
+                                  appName: app.name,
+                                  owner: owner ?? '',
+                                  repo: repo ?? '',
+                                  avatarUrl: app.avatar_url ?? '',
+                                  version: rel.tag_name,
+                                });
+                                router.push('/downloads' as any);
                               }}
                               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
                                 borderWidth: 1.5, borderColor: '#1677FF' }}>

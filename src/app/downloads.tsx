@@ -274,12 +274,23 @@ export default function DownloadsScreen() {
                 label={isInstaller ? '安装' : '打开'}
                 onPress={async () => {
                   try {
-                    const Sharing = await import('expo-sharing');
-                    if (await Sharing.isAvailableAsync()) {
-                      await Sharing.shareAsync(item.localUri!, {
-                        mimeType: isInstallerFile(item.filename) ? 'application/vnd.android.package-archive' : 'application/octet-stream',
-                        dialogTitle: isInstaller ? '安装应用' : '查看文件',
+                    if (Platform.OS === 'android' && isInstaller) {
+                      // Android：直接唤起系统安装界面
+                      const IntentLauncher = await import('expo-intent-launcher');
+                      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+                        data: item.localUri!,
+                        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+                        type: 'application/vnd.android.package-archive',
                       });
+                    } else {
+                      // iOS / Web / 非安装文件：系统分享/打开
+                      const Sharing = await import('expo-sharing');
+                      if (await Sharing.isAvailableAsync()) {
+                        await Sharing.shareAsync(item.localUri!, {
+                          mimeType: isInstallerFile(item.filename) ? 'application/vnd.android.package-archive' : 'application/octet-stream',
+                          dialogTitle: isInstaller ? '安装应用' : '查看文件',
+                        });
+                      }
                     }
                   } catch { /* ignore */ }
                 }}
