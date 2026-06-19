@@ -2,30 +2,32 @@
  * useAndroidExitBack
  *
  * 专为 Tab 屏幕设计的 Android 返回键 Hook。
- * 原理：
- *   - expo-router v55 使用 native-stack（基于 react-native-screens Fragment 堆栈），
- *     子页面（detail/downloads 等）的返回由 Android Fragment Manager 在原生层处理，
- *     不经过 JS BackHandler。
- *   - Tab 屏幕是真正的 React Navigation Screen，当子页面压入 Stack 时，Tab 屏幕触发
- *     blur，useFocusEffect cleanup 自动移除 BackHandler；返回 Tab 时重新注册。
- *   - 只需在每个 Tab 屏幕组件顶层调用此 Hook，无需任何参数。
- *
- * 行为：
- *   - 第一次按返回：Toast 提示"再按一次退出应用"
- *   - 2 秒内再次按返回：调用 BackHandler.exitApp() 退出
+ * 
+ * 改进说明：
+ * 原逻辑在任何情况下拦截返回键并执行“再按一次退出”，导致在子页面（如详情页）按系统返回键也触发退出。
+ * 现增加 router.canGoBack() 检查：
+ * - 如果可以回退（在子页面），则不拦截，让系统/导航器处理。
+ * - 如果无法回退（在 Tab 首页），则执行“再按一次退出”逻辑。
  */
 import { useCallback, useRef } from 'react';
 import { BackHandler, Platform, ToastAndroid } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 export function useAndroidExitBack() {
   const lastBackTime = useRef(0);
+  const router = useRouter();
 
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== 'android') return;
 
       const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        // 如果当前路由栈可以回退，则不处理，交给系统默认逻辑（即返回上一页）
+        if (router.canGoBack()) {
+          return false;
+        }
+
+        // 已经在根页面（Tab），执行双击退出逻辑
         const now = Date.now();
         if (now - lastBackTime.current < 2000) {
           BackHandler.exitApp();
@@ -37,6 +39,6 @@ export function useAndroidExitBack() {
       });
 
       return () => subscription.remove();
-    }, [])
+    }, [router])
   );
 }

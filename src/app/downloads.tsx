@@ -10,7 +10,7 @@
  * - 存储目录信息
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView, BackHandler } from 'react-native';
+import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';

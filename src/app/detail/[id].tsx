@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, type ReactNode } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking, Platform, useWindowDimensions, BackHandler } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking, Platform, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
