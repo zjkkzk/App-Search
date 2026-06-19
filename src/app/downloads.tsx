@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { useFocusEffect } from 'expo-router';
 import { useDownload } from '@/ctx/DownloadContext';
-import { formatSpeed, formatBytes, isInstallerFile, hasDownloadsPermission } from '@/lib/downloadManager';
+import { formatSpeed, formatBytes, isInstallerFile } from '@/lib/downloadManager';
 import { getDownloadHistory, clearDownloadHistory } from '@/lib/database';
 import { getNotificationPermissionStatus, requestNotificationPermission } from '@/lib/notifications';
 import type { DownloadTask } from '@/lib/downloadManager';
@@ -107,14 +107,15 @@ function ActionBtn({ icon, color, bg, onPress, label }: {
 
 export default function DownloadsScreen() {
   const router = useRouter();
-  const { tasks, pause, resume, cancel, deleteFile, clearFinished, pauseAll, resumeAll, retry } = useDownload();
+  const { tasks, pause, resume, cancel, deleteFile, clearFinished, pauseAll, resumeAll, retry,
+          safGranted, requestDownloadsPermission, refreshSafStatus } = useDownload();
 
   const [tab, setTab] = useState<TabKey>('active');
   const [history, setHistory] = useState<DownloadRecord[]>([]);
   const [histLoading, setHistLoading] = useState(false);
-  const [safGranted, setSafGranted] = useState(false);
   const [notifStatus, setNotifStatus] = useState<'granted' | 'denied' | 'undetermined' | 'unavailable'>('undetermined');
   const [confirmClear, setConfirmClear] = useState<'finished' | 'history' | null>(null);
+  const [requestingPerm, setRequestingPerm] = useState(false);
 
   // 分类任务
   const activeTasks = tasks.filter(
@@ -125,10 +126,10 @@ export default function DownloadsScreen() {
   );
   const allPaused = activeTasks.length > 0 && activeTasks.every((t) => t.status === 'paused');
 
-  // 聚焦时刷新状态
+  // 聚焦时刷新权限状态 & 通知状态
   useFocusEffect(useCallback(() => {
     (async () => {
-      setSafGranted(await hasDownloadsPermission());
+      await refreshSafStatus();
       if (Platform.OS !== 'web') {
         const s = await getNotificationPermissionStatus();
         setNotifStatus(s);
@@ -156,6 +157,16 @@ export default function DownloadsScreen() {
   useEffect(() => {
     if (tab === 'active' && activeTasks.length === 0 && doneTasks.length > 0) setTab('done');
   }, [tasks.length]);
+
+  // 显式请求 SAF 权限
+  const handleRequestSaf = async () => {
+    setRequestingPerm(true);
+    try {
+      await requestDownloadsPermission();
+    } finally {
+      setRequestingPerm(false);
+    }
+  };
 
   // ── 统计总下载量 ─────────────────────────────────────────
   const totalDownloadedBytes = doneTasks.reduce((sum, t) => sum + (t.totalBytes || 0), 0);
@@ -395,7 +406,7 @@ export default function DownloadsScreen() {
       {/* ── 头部 ── */}
       <View style={{ backgroundColor: '#fff', borderBottomWidth: 0.5, borderBottomColor: '#EBEBEB' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={{ marginRight: 12 }}>
+          <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)' as any)} hitSlop={12} style={{ marginRight: 12 }}>
             <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
           </Pressable>
           <Text style={{ flex: 1, fontSize: 18, fontWeight: '700' }}>下载管理</Text>
@@ -453,21 +464,26 @@ export default function DownloadsScreen() {
 
       {/* ── 存储信息卡（Android SAF）── */}
       {Platform.OS === 'android' && tab === 'active' && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8,
-          backgroundColor: safGranted ? '#F6FFED' : '#FFF7E6',
-          paddingHorizontal: 16, paddingVertical: 8,
-          borderBottomWidth: 0.5, borderBottomColor: safGranted ? '#D9F7BE' : '#FFE7BA' }}>
+        <Pressable
+          onPress={!safGranted ? handleRequestSaf : undefined}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 8,
+            backgroundColor: safGranted ? '#F6FFED' : '#FFF7E6',
+            paddingHorizontal: 16, paddingVertical: 10,
+            borderBottomWidth: 0.5, borderBottomColor: safGranted ? '#D9F7BE' : '#FFE7BA' }}>
           <Ionicons name={safGranted ? 'folder-open-outline' : 'folder-outline'} size={15}
             color={safGranted ? GREEN : ORANGE} />
           <Text style={{ flex: 1, fontSize: 12, color: safGranted ? '#389E0D' : '#874D00' }}>
             {safGranted
-              ? `文件保存至 Download/开源应用商店/  ·  本次累计 ${formatBytes(totalDownloadedBytes)}`
-              : '未授权 Downloads 目录，文件将保存到应用缓存区'}
+              ? `文件保存至 Download/开源应用商店/ · 累计 ${formatBytes(totalDownloadedBytes)}`
+              : requestingPerm ? '正在申请授权…' : '点击授权 Download 目录，文件将保存到公共下载区'}
           </Text>
-          {totalDownloadedBytes > 0 && safGranted && (
-            <Text style={{ fontSize: 11, color: GREEN, fontWeight: '600' }}>{formatBytes(totalDownloadedBytes)}</Text>
+          {!safGranted && !requestingPerm && (
+            <Text style={{ fontSize: 12, color: ORANGE, fontWeight: '700' }}>去授权</Text>
           )}
-        </View>
+          {!safGranted && (
+            <Ionicons name="chevron-forward" size={14} color={ORANGE} />
+          )}
+        </Pressable>
       )}
 
       {/* ── 标签内容 ── */}

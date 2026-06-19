@@ -35,7 +35,7 @@ export default function SearchHistoryScreen() {
     <SafeAreaView className="flex-1 bg-background" edges={['top']}>
       {/* 头部 */}
       <View className="flex-row items-center px-4 py-2">
-        <Pressable onPress={() => router.back()} className="p-2">
+        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)' as any)} className="p-2">
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </Pressable>
         <Text className="flex-1 text-center text-base font-semibold text-foreground pr-10">搜索历史</Text>

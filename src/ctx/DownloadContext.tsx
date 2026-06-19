@@ -14,7 +14,7 @@ import type { DownloadTask } from '@/lib/downloadManager';
 
 interface DownloadContextValue {
   tasks: DownloadTask[];
-  enqueue: (params: Parameters<typeof DM.enqueue>[0]) => string;
+  enqueue: (params: Parameters<typeof DM.enqueue>[0]) => Promise<string>;
   retry: (oldId: string) => string;
   pause: (id: string) => Promise<void>;
   resume: (id: string) => Promise<void>;
@@ -26,15 +26,17 @@ interface DownloadContextValue {
   resumeAll: () => void;
   findByUrl: (url: string) => DownloadTask | undefined;
   activeCount: number;
+  safGranted: boolean;
   requestDownloadsPermission: () => Promise<boolean>;
+  refreshSafStatus: () => Promise<void>;
 }
 
 const DownloadContext = createContext<DownloadContextValue | null>(null);
 
 export function DownloadProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<DownloadTask[]>(() => DM.getAllTasks());
+  const [safGranted, setSafGranted] = useState(false);
   const pendingRef = useRef(false);
-  const safRequestedRef = useRef(false);
   const lastNotifState = useRef<Map<string, { status: string; progress: number }>>(new Map());
 
   useEffect(() => {
@@ -77,11 +79,19 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
       }, 150);
     });
 
+    // 初始化时检查 SAF 权限状态
     if (Platform.OS === 'android') {
-      DM.hasDownloadsPermission().then((has) => { if (has) safRequestedRef.current = true; });
+      DM.hasDownloadsPermission().then((has) => setSafGranted(has));
     }
     return unsubscribe;
   }, []);
+
+  const refreshSafStatus = async () => {
+    if (Platform.OS === 'android') {
+      const has = await DM.hasDownloadsPermission();
+      setSafGranted(has);
+    }
+  };
 
   const activeCount = tasks.filter(
     (t) => t.status === 'pending' || t.status === 'downloading'
@@ -89,11 +99,13 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
 
   const notifRequestedRef = useRef(false);
 
-  const enqueueWithSaf = (params: Parameters<typeof DM.enqueue>[0]): string => {
-    // Android：首次入队时请求 SAF 目录权限
-    if (Platform.OS === 'android' && !safRequestedRef.current) {
-      safRequestedRef.current = true;
-      DM.requestDownloadsPermission();
+  /** 入队：Android 先确保 SAF 权限再开始下载 */
+  const enqueueWithSaf = async (params: Parameters<typeof DM.enqueue>[0]): Promise<string> => {
+    // Android：若未授权，先弹目录选择器
+    if (Platform.OS === 'android' && !safGranted) {
+      const granted = await DM.requestDownloadsPermission();
+      setSafGranted(granted);
+      // 权限被拒也继续（文件降级保存到缓存区，不阻断下载）
     }
     // 首次下载时懒请求通知权限（iOS/Android）
     if (Platform.OS !== 'web' && !notifRequestedRef.current) {
@@ -103,6 +115,12 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
       });
     }
     return DM.enqueue(params);
+  };
+
+  const requestDownloadsPermissionAndRefresh = async (): Promise<boolean> => {
+    const granted = await DM.requestDownloadsPermission();
+    setSafGranted(granted);
+    return granted;
   };
 
   const value: DownloadContextValue = {
@@ -135,7 +153,9 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     },
     findByUrl: DM.findTaskByUrl,
     activeCount,
-    requestDownloadsPermission: DM.requestDownloadsPermission,
+    safGranted,
+    requestDownloadsPermission: requestDownloadsPermissionAndRefresh,
+    refreshSafStatus,
   };
 
   return (

@@ -144,7 +144,7 @@ export default function RankingsScreen() {
           borderBottomColor: '#E8E8E8',
         }}
       >
-        <Pressable onPress={() => router.back()} hitSlop={12} style={{ marginRight: 12 }}>
+        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)' as any)} hitSlop={12} style={{ marginRight: 12 }}>
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </Pressable>
         <Text style={{ flex: 1, fontSize: 18, fontWeight: '700' }}>应用榜单</Text>

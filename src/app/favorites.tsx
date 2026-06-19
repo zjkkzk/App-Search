@@ -20,7 +20,7 @@ export default function FavoritesScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8' }} edges={['top']}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff', borderBottomWidth: 0.5, borderBottomColor: '#E8E8E8' }}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={{ marginRight: 12 }}>
+        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)' as any)} hitSlop={12} style={{ marginRight: 12 }}>
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </Pressable>
         <Text style={{ flex: 1, fontSize: 18, fontWeight: '700' }}>我的收藏</Text>

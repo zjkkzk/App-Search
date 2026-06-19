@@ -449,7 +449,7 @@ export default function DetailScreen() {
                                   html_url: asset.browser_download_url,
                                 }).catch(() => {});
                                 addAppEvent({ event_type: 'download', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
-                                enqueue({
+                                await enqueue({
                                   url: asset.browser_download_url,
                                   filename: asset.name,
                                   appId: app.id,

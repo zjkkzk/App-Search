@@ -55,14 +55,26 @@ export async function requestDownloadsPermission(): Promise<boolean> {
   const fs = await getFS();
   if (!fs) return false;
   try {
+    // 初始路径提示设为 Download（Android 公共下载目录）
     const result = await fs.StorageAccessFramework.requestDirectoryPermissionsAsync(
       'content://com.android.externalstorage.documents/tree/primary%3ADownload'
     );
     if (!result.granted) return false;
     let finalUri = result.directoryUri;
+    // 在 Download 下建立 APP_FOLDER_NAME 子目录
     try {
       finalUri = await fs.StorageAccessFramework.makeDirectoryAsync(result.directoryUri, APP_FOLDER_NAME);
-    } catch { /* directory may already exist */ }
+    } catch {
+      // 子目录可能已存在，尝试从目录列表中找到它
+      try {
+        const entries = await fs.StorageAccessFramework.readDirectoryAsync(result.directoryUri);
+        const sub = entries.find((e: string) => e.includes(encodeURIComponent(APP_FOLDER_NAME)) || e.endsWith(APP_FOLDER_NAME));
+        if (sub) finalUri = sub;
+        // 若找不到，退回到 Download 根目录即可
+      } catch {
+        // 保持 finalUri = result.directoryUri（Download 根目录）
+      }
+    }
     _safDirUri = finalUri;
     await AsyncStorage.setItem(SAF_URI_KEY, finalUri).catch(() => null);
     return true;
@@ -547,12 +559,9 @@ async function startTask(id: string) {
     return;
   }
 
-  // 尝试多线程下载 → 失败则降级单线程
-  let result = await multiThreadedDownload(id);
-
-  if (!result.success && result.error === 'RANGE_NOT_SUPPORTED') {
-    result = await singleThreadedDownload(id);
-  }
+  // 直接使用单线程下载（createDownloadResumable：原生流式下载，有正确进度回调，支持 redirect）
+  // 多线程方案（fetch+ArrayBuffer+base64合并）对大文件会 OOM 且无增量进度，已废弃
+  const result = await singleThreadedDownload(id);
 
   const t = tasks.get(id);
   if (!t) return;
