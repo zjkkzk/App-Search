@@ -8,7 +8,6 @@ import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from '
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { supabase } from '@/client/supabase';
 import { uploadPendingEvents } from '@/lib/events';
 
@@ -46,7 +45,6 @@ const PERIOD_TABS: { key: Period; label: string }[] = [
 const MEDAL_COLORS = ['#FFD700', '#C0C0C0', '#CD7F32'];
 
 export default function RankingScreen() {
-  useAndroidExitBack();
   const router = useRouter();
   const [rankType, setRankType] = useState<RankType>('hot');
   const [period, setPeriod] = useState<Period>('week');

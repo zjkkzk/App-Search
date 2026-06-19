@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useNavigationContainerRef } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, Pressable, Platform } from 'react-native';
+import { BackHandler, Platform, ToastAndroid, View, Text, Pressable } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
@@ -52,6 +52,10 @@ class ErrorBoundary extends React.Component<
 export default function RootLayout() {
   const [initDone, setInitDone] = useState(false);
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
+  // useNavigationContainerRef 可读取整个导航树的真实状态，
+  // 比 useRouter().canGoBack() 更准确（后者在根布局中可能错误返回 false）
+  const navigationRef = useNavigationContainerRef();
+  const lastBackTime = useRef(0);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -60,6 +64,30 @@ export default function RootLayout() {
     initToken()
       .catch(() => {})
       .finally(() => setInitDone(true));
+  }, []);
+
+  // 集中式 Android 返回键处理（单一 handler，无 focus 竞争）：
+  //   canGoBack() = true  → return false，事件透传给原生 Fragment 堆栈，子页面自动后退
+  //   canGoBack() = false → 拦截：第一次提示 Toast，2s 内再按退出应用
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (navigationRef.canGoBack()) {
+        return false; // 透传给原生 Stack，子页面返回由原生 Fragment 处理
+      }
+      // 已在根页（Tab），处理退出逻辑
+      const now = Date.now();
+      if (now - lastBackTime.current < 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+      lastBackTime.current = now;
+      ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
+      return true;
+    });
+    return () => sub.remove();
+  // navigationRef 是稳定引用，仅注册一次
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

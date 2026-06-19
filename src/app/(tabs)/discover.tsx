@@ -8,7 +8,6 @@ import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
-import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 
 const PLATFORMS = [
   { key: '全平台', icon: 'grid-outline',        color: '#1677FF' },
@@ -37,7 +36,6 @@ const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
 ];
 
 export default function DiscoverTab() {
-  useAndroidExitBack();
   const [apps, setApps] = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
