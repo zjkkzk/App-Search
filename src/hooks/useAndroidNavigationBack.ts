@@ -1,88 +1,76 @@
 /**
  * useAndroidNavigationBack
  *
- * Android 系统返回键统一处理方案（JS 路由历史栈）
+ * Android 系统返回键处理 —— 必须在 Stack 内部的子组件中调用（如 (tabs)/_layout.tsx），
+ * 不能在根 _layout.tsx 中调用，否则 usePathname/useRouter 无法正常工作。
  *
  * 行为规则：
- *  1. 有 JS 历史上一页   → router.replace(previous) 返回上一级
- *  2. 非首页 Tab（discover/ranking/search/profile）→ 回到 home
- *  3. 已在首页           → 第一次提示"再按一次退出"，2秒内第二次 exitApp()
+ *  1. 在 Stack 子页面（detail / downloads / favorites / search-history / rankings）
+ *     → router.back() 返回上一级，由 expo-router 决定返回目标
+ *  2. 在非首页 Tab（discover / ranking / search / profile）
+ *     → router.replace('/(tabs)/home') 回到首页 Tab
+ *  3. 已在首页 /home
+ *     → 第一次：Toast 提示"再按一次退出应用"
+ *     → 2 秒内第二次：BackHandler.exitApp()
  *
  * 设计要点：
- *  - BackHandler 只注册一次（根布局），避免多个 handler 焦点竞争
- *  - 始终 return true 消费事件，永不依赖 canGoBack() 或原生 Fragment 栈
- *  - 用 isGoingBackRef 区分"用户导航"和"程序回退"，防止回退时重复入栈
+ *  - 完全不依赖 router.canGoBack()、NavigationContainerRef、JS 历史栈
+ *  - 始终 return true 消费事件，防止原生默认退出行为
+ *  - pathnameRef 保持最新路径，BackHandler 闭包只引用 ref（注册一次即可）
  */
 import { useEffect, useRef } from 'react';
 import { BackHandler, Platform, ToastAndroid } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
-import type { RelativePathString } from 'expo-router';
 
-// 非首页的 Tab 路径（pathname 不含 route group 前缀）
+// Tab 屏幕路径集合
+const HOME_PATH = '/home';
 const NON_HOME_TABS = new Set(['/discover', '/ranking', '/search', '/profile']);
+
+// Stack 子页面路径前缀 / 精确路径（非 Tab 的页面）
+function isStackScreen(path: string): boolean {
+  return (
+    path.startsWith('/detail/') ||
+    path === '/downloads' ||
+    path === '/favorites' ||
+    path === '/search-history' ||
+    path === '/rankings'
+  );
+}
 
 export function useAndroidNavigationBack() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const historyRef = useRef<string[]>([]);
+  // 始终保持最新 pathname，让 BackHandler 闭包读取
   const pathnameRef = useRef(pathname);
-  const isGoingBackRef = useRef(false);
+  useEffect(() => { pathnameRef.current = pathname; }, [pathname]);
+
+  // 双击退出计数
   const exitPressRef = useRef(0);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 同步最新 pathname 到 ref（供 BackHandler 闭包读取）
-  useEffect(() => {
-    pathnameRef.current = pathname;
-  }, [pathname]);
-
-  // 记录路由历史
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-
-    // 程序主动回退时跳过入栈
-    if (isGoingBackRef.current) {
-      isGoingBackRef.current = false;
-      return;
-    }
-
-    // 避免连续重复路径入栈（Tab 切换同一 Tab 等情况）
-    const last = historyRef.current[historyRef.current.length - 1];
-    if (last !== pathname) {
-      historyRef.current.push(pathname);
-    }
-  }, [pathname]);
-
-  // 注册 BackHandler（仅注册一次）
+  // 只注册一次 BackHandler，通过 ref 读取最新状态
   useEffect(() => {
     if (Platform.OS !== 'android') return;
 
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       const current = pathnameRef.current;
-      const history = historyRef.current;
 
-      // ① 有历史上一页 → 返回上一级
-      if (history.length > 1) {
-        history.pop(); // 弹出当前页
-        const previous = history[history.length - 1];
-        isGoingBackRef.current = true;
-        // 重置退出计数，避免跨页面残留
-        exitPressRef.current = 0;
-        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-        router.replace(previous as RelativePathString);
+      // ① Stack 子页面 → 返回上一级（expo-router 决定目标）
+      if (isStackScreen(current)) {
+        router.back();
         return true;
       }
 
       // ② 非首页 Tab → 回到首页
       if (NON_HOME_TABS.has(current)) {
-        isGoingBackRef.current = true;
         exitPressRef.current = 0;
         if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-        router.replace('/(tabs)/home' as RelativePathString);
+        router.replace('/(tabs)/home' as any);
         return true;
       }
 
-      // ③ 已在首页 → 双击退出
+      // ③ 首页（/home 或其他未知路径） → 双击退出
       exitPressRef.current += 1;
       if (exitPressRef.current === 1) {
         ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
@@ -91,8 +79,7 @@ export function useAndroidNavigationBack() {
         }, 2000);
         return true;
       }
-
-      // 第二次按下，退出应用
+      // 第二次按下：退出
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
       exitPressRef.current = 0;
       BackHandler.exitApp();
@@ -103,5 +90,5 @@ export function useAndroidNavigationBack() {
       sub.remove();
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     };
-  }, []); // 空依赖：只注册一次，通过 ref 读取最新状态
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }
