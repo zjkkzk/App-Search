@@ -119,7 +119,7 @@ export default function DownloadsScreen() {
 
   // 分类任务
   const activeTasks = tasks.filter(
-    (t) => t.status === 'pending' || t.status === 'downloading' || t.status === 'paused',
+    (t) => t.status === 'pending' || t.status === 'resolving' || t.status === 'downloading' || t.status === 'paused',
   );
   const doneTasks = tasks.filter(
     (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled',
@@ -192,7 +192,7 @@ export default function DownloadsScreen() {
                 <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>{pct}%</Text>
                 {item.multiThreaded && (
                   <View style={{ backgroundColor: '#EEF5FF', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-                    <Text style={{ fontSize: 10, color: BLUE }}>多线程</Text>
+                    <Text style={{ fontSize: 10, color: BLUE }}>{item.activeChunks} 线程</Text>
                   </View>
                 )}
                 {spd ? <Text style={{ fontSize: 11, color: '#999' }}>{spd}</Text> : null}
@@ -201,6 +201,17 @@ export default function DownloadsScreen() {
                     {formatBytes(item.bytesWritten)}/{formatBytes(item.totalBytes)}
                   </Text>
                 )}
+                {item.eta > 0 && (
+                  <Text style={{ fontSize: 11, color: '#BBB' }}>
+                    剩余 {item.eta < 60 ? `${item.eta}s` : `${Math.round(item.eta / 60)}min`}
+                  </Text>
+                )}
+              </View>
+            )}
+            {item.status === 'resolving' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                <ActivityIndicator size="small" color={BLUE} />
+                <Text style={{ fontSize: 12, color: '#999' }}>解析下载链接…</Text>
               </View>
             )}
             {item.status === 'paused' && (
@@ -220,7 +231,7 @@ export default function DownloadsScreen() {
             {item.status === 'paused' && (
               <ActionBtn icon="play" color={BLUE} bg="#E6F7FF" onPress={() => resume(item.id)} />
             )}
-            {(item.status === 'downloading' || item.status === 'paused' || item.status === 'pending') && (
+            {(item.status === 'downloading' || item.status === 'resolving' || item.status === 'paused' || item.status === 'pending') && (
               <ActionBtn icon="close" color={RED} bg="#FFF1F0" onPress={() => cancel(item.id)} />
             )}
             {isFailed && (

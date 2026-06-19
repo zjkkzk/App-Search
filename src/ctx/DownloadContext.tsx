@@ -55,7 +55,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         if (currKey !== prevKey) {
           lastNotifState.current.set(task.id, { status: task.status, progress: task.progress });
 
-          if (task.status === 'downloading' && task.progress > 0) {
+      if (task.status === 'downloading' && task.progress > 0) {
             showSystemProgress({
               id: task.id, appName: task.appName, progress: task.progress,
               speed: task.speed, multiThreaded: task.multiThreaded,
@@ -94,7 +94,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
   };
 
   const activeCount = tasks.filter(
-    (t) => t.status === 'pending' || t.status === 'downloading'
+    (t) => t.status === 'pending' || t.status === 'downloading' || t.status === 'resolving'
   ).length;
 
   const notifRequestedRef = useRef(false);
