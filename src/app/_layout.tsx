@@ -7,6 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
 import AppSplash from '@/components/AppSplash';
+import WebShell from '@/components/openappstore/WebShell';
 import "../global.css";
 
 // 仅在 Native 端阻止启动屏自动隐藏（Web 端该 API 是空操作，不会出错）
@@ -62,21 +63,36 @@ export default function RootLayout() {
       .finally(() => setInitDone(true));
   }, []);
 
+  // native 端：整个 App 就是一个 WebView 套壳，无 expo-router Stack，
+  // 返回键由 WebShell 内部的 BackHandler 处理，完全隔离于 web 的路由树。
+  // 这样 src/app/index.tsx 无需存在，web 构建时也不会出现多余的 "index" tab。
+  if (Platform.OS !== 'web') {
+    return (
+      <DownloadProvider>
+        <SafeAreaProvider style={{ flex: 1 }}>
+          <WebShell />
+        </SafeAreaProvider>
+        {showSplash && (
+          <AppSplash initDone={initDone} onHidden={() => setShowSplash(false)} />
+        )}
+      </DownloadProvider>
+    );
+  }
+
+  // web 端：正常的 expo-router Stack + Tabs 导航
   return (
     <ErrorBoundary>
       <DownloadProvider>
         <SafeAreaProvider style={{ flex: 1 }}>
-          <StatusBar style="dark" backgroundColor="transparent" translucent={Platform.OS === 'android'} />
+          <StatusBar style="dark" backgroundColor="transparent" translucent={false} />
           <Stack
+            initialRouteName="(tabs)"
             screenOptions={{
               headerShown: false,
-              animation: Platform.OS === 'android' ? 'fade_from_bottom' : Platform.OS === 'ios' ? 'default' : 'none',
+              animation: 'none',
               gestureEnabled: true,
             }}
           >
-            {/* native 入口：WebView 套壳，返回键通过 WebView.goBack() 处理 */}
-            <Stack.Screen name="index" options={{ animation: 'none' }} />
-            {/* web 平台入口：index 重定向至 (tabs) */}
             <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
             <Stack.Screen name="detail" />
             <Stack.Screen name="downloads" />
@@ -85,13 +101,6 @@ export default function RootLayout() {
             <Stack.Screen name="+not-found" />
           </Stack>
         </SafeAreaProvider>
-        {/* AppSplash 自管最短展示时长(1.8s) + 淡出动画，结束后自行卸载 */}
-        {showSplash && (
-          <AppSplash
-            initDone={initDone}
-            onHidden={() => setShowSplash(false)}
-          />
-        )}
       </DownloadProvider>
     </ErrorBoundary>
   );
