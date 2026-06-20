@@ -10,7 +10,8 @@ import { TranslationProvider } from '@/ctx/TranslationContext';
 import AppSplash from '@/components/AppSplash';
 import "../global.css";
 
-// 仅在 Native 端阻止启动屏自动隐藏（Web 端该 API 是空操作，不会出错）
+// 在模块顶层预先阻止原生启动图自动隐藏，确保 AppSplash 接管前不会闪白屏
+// hideAsync 由 AppSplash 组件在挂载后立即调用
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync().catch(() => {});
 }
@@ -55,10 +56,8 @@ export default function RootLayout() {
   const [showSplash, setShowSplash] = useState(Platform.OS !== 'web');
 
   // Android 返回键由各页面自行通过 useAndroidExitBack / useAndroidGoBack 处理
+  // hideAsync 已移至 AppSplash 挂载时调用，无需在此处理
   useEffect(() => {
-    if (Platform.OS !== 'web') {
-      requestAnimationFrame(() => SplashScreen.hideAsync().catch(() => {}));
-    }
     initToken().catch(() => {}).finally(() => setInitDone(true));
   }, []);
 

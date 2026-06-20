@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, Platform, Modal } from 'react-native';
 import { SvgXml } from 'react-native-svg';
+import * as SplashScreen from 'expo-splash-screen';
 
 const APP_ICON_SVG = `<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
 <path d="M0 0 C63.36 0 126.72 0 192 0 C192 63.36 192 126.72 192 192 C128.64 192 65.28 192 0 192 C0 128.64 0 65.28 0 0 Z " fill="#FCFDFC" transform="translate(0,0)"/>
@@ -28,18 +29,23 @@ interface Props {
 
 export default function AppSplash({ initDone, onHidden }: Props) {
   const mountTimeRef = useRef(Date.now());
-  // 整体透明度：入场 0→1，离场 1→0
-  const opacityAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.92)).current;
+  // 整体透明度：直接从 1 开始，无入场淡入，避免原生启动图隐藏后出现白屏间隙
+  const opacityAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef(new Animated.Value(0.94)).current;
   const dotsAnim = useRef(new Animated.Value(0)).current;
   const [visible, setVisible] = useState(true);
 
-  // 入场动画（挂载即播）
+  // 挂载后立即隐藏原生启动图（此时 AppSplash Modal 已在屏幕上，opacity=1，无白屏）
+  // 同步启动 logo 弹入动画和点状 loading
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacityAnim, { toValue: 1, duration: 400, useNativeDriver: !isWeb }),
-      Animated.spring(scaleAnim, { toValue: 1, friction: 7, tension: 45, useNativeDriver: !isWeb }),
-    ]).start();
+    if (Platform.OS !== 'web') {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+
+    // logo 弹入（scale 0.94→1），无 opacity 动画
+    Animated.spring(scaleAnim, {
+      toValue: 1, friction: 7, tension: 50, useNativeDriver: !isWeb,
+    }).start();
 
     const loop = Animated.loop(
       Animated.sequence([
@@ -124,11 +130,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     overflow: 'hidden',
     backgroundColor: '#FCFDFC',
-    shadowColor: '#135DB7',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 6,
+    // 无阴影 —— 移除光晕效果
   },
   appName: {
     marginTop: 4,
