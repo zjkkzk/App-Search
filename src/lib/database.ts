@@ -40,7 +40,7 @@ function initDb() {
         );
         CREATE TABLE IF NOT EXISTS installed_apps (
           id TEXT PRIMARY KEY,
-          app_id INTEGER NOT NULL,
+          app_id INTEGER NOT NULL UNIQUE,
           app_name TEXT NOT NULL,
           owner TEXT NOT NULL,
           repo TEXT NOT NULL,
@@ -52,6 +52,8 @@ function initDb() {
           installed_at TEXT NOT NULL
         );
       `);
+      // ── 迁移 v1→v2：补加 UNIQUE(app_id) + 从 download_history 填充历史数据 ──
+      await runInstalledMigration(db);
       return db;
     });
   }
@@ -191,6 +193,51 @@ export async function clearSearchHistory(): Promise<void> {
 
 function tryParse(v: any, fallback: any) {
   try { return typeof v === 'string' ? JSON.parse(v) : v ?? fallback; } catch { return fallback; }
+}
+
+// ─── installed_apps 数据库迁移 ───────────────────────────────────────────────
+// 问题：v1 建表时 app_id 缺少 UNIQUE 约束，ON CONFLICT(app_id) 静默失败
+// 修复：重建带 UNIQUE 约束的表，并从 download_history 填充历史安装记录
+const INSTALLED_MIGRATED_KEY = '@oas/installed_v2_migrated';
+
+async function runInstalledMigration(db: any): Promise<void> {
+  try {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const done = await AsyncStorage.getItem(INSTALLED_MIGRATED_KEY);
+    if (done === '1') return;
+
+    // 重建带 UNIQUE 约束的表（保留已有数据）
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS installed_apps_v2 (
+        id TEXT PRIMARY KEY,
+        app_id INTEGER NOT NULL UNIQUE,
+        app_name TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        avatar_url TEXT,
+        installed_version TEXT,
+        latest_version TEXT,
+        ignored_version TEXT,
+        last_checked TEXT,
+        installed_at TEXT NOT NULL
+      );
+      -- 迁移旧 installed_apps 数据（如果有）
+      INSERT OR IGNORE INTO installed_apps_v2
+        SELECT id, app_id, app_name, owner, repo, avatar_url,
+               installed_version, latest_version, ignored_version, last_checked, installed_at
+        FROM installed_apps;
+      -- 从 download_history 填充历史安装记录（version 不为空才算有效）
+      INSERT OR IGNORE INTO installed_apps_v2
+        (id, app_id, app_name, owner, repo, avatar_url, installed_version, installed_at)
+        SELECT id, app_id, app_name, owner, repo, avatar_url, version, download_time
+        FROM download_history
+        WHERE version IS NOT NULL AND version != '';
+      DROP TABLE installed_apps;
+      ALTER TABLE installed_apps_v2 RENAME TO installed_apps;
+    `);
+
+    await AsyncStorage.setItem(INSTALLED_MIGRATED_KEY, '1');
+  } catch { /* 迁移失败不阻断主流程 */ }
 }
 
 // ─── 已安装应用 ────────────────────────────────────────────────────────────────
