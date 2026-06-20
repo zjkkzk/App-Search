@@ -74,11 +74,8 @@ export default function HomeTab() {
     if (apps.length === 0) loadData(1, false);
   }, [apps.length, loadData]));
 
-  // Android 返回键双击退出
+  // 双击退出：传统 BackHandler 链路（enableOnBackInvokedCallback=false 后正常工作）
   useAndroidExitBack();
-
-  // Android 返回键双击退出已移至原生层（plugins/withAndroidDoubleBackExit.js）
-  // 通过 OnBackPressedCallback 在 MainActivity.kt 中处理，彻底绕过 JS BackHandler 限制
 
   const onCategoryPress = (key: string) => {
     setActiveCategory(key);
