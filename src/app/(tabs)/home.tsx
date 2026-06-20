@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/client/supabase';
@@ -72,6 +73,9 @@ export default function HomeTab() {
   useFocusEffect(useCallback(() => {
     if (apps.length === 0) loadData(1, false);
   }, [apps.length, loadData]));
+
+  // Android 返回键双击退出
+  useAndroidExitBack();
 
   // Android 返回键双击退出已移至原生层（plugins/withAndroidDoubleBackExit.js）
   // 通过 OnBackPressedCallback 在 MainActivity.kt 中处理，彻底绕过 JS BackHandler 限制

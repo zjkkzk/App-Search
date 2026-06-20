@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/client/supabase';
@@ -36,6 +37,8 @@ const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
 ];
 
 export default function DiscoverTab() {
+  useAndroidExitBack();
+
   const [apps, setApps] = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);

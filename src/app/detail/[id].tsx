@@ -1,6 +1,7 @@
 import React, { useEffect, useState, type ReactNode } from 'react';
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking, Platform, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchRepoDetail, fetchReleases, fetchReadme, getPlatformFromFilename, filterInstallAssets, filterVerificationAssets } from '@/lib/github';
@@ -251,6 +252,8 @@ function MarkdownSection({ content, owner, repo }: { content: string; owner: str
 }
 
 export default function DetailScreen() {
+  useAndroidGoBack();
+
   const { owner, repo } = useLocalSearchParams<{ owner: string; repo: string }>();
   const router = useRouter();
   const { enqueue, findByUrl } = useDownload();

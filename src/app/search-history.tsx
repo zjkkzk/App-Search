@@ -2,12 +2,15 @@ import React from 'react';
 import { View, Text, Pressable, FlatList } from 'react-native';
 import { useCallback, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { getSearchHistory, clearSearchHistory } from '@/lib/database';
 import EmptyState from '@/components/openappstore/EmptyState';
 
 export default function SearchHistoryScreen() {
+  useAndroidGoBack();
+
   const router = useRouter();
   const [history, setHistory] = useState<string[]>([]);
 

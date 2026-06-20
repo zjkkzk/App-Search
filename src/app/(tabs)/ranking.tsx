@@ -6,6 +6,7 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/client/supabase';
@@ -45,6 +46,8 @@ const PERIOD_TABS: { key: Period; label: string }[] = [
 const MEDAL_COLORS = ['#FFD700', '#C0C0C0', '#CD7F32'];
 
 export default function RankingScreen() {
+  useAndroidExitBack();
+
   const router = useRouter();
   const [rankType, setRankType] = useState<RankType>('hot');
   const [period, setPeriod] = useState<Period>('week');

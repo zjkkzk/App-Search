@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, Linking, Platform } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { saveToken, getToken, clearToken } from '@/lib/token';
@@ -122,6 +123,8 @@ function CollapseHeader({
 
 // ════════════════════════════════════════════════════════
 export default function ProfileTab() {
+  useAndroidExitBack();
+
   const router = useRouter();
   const { activeCount } = useDownload();
 

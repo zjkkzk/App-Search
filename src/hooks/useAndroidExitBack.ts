@@ -1,33 +1,36 @@
 /**
- * useAndroidExitBack — Tab 根屏幕使用（首页/发现/榜单/搜索/我的）
+ * useAndroidExitBack
  *
- * 原理同 useAndroidGoBack：必须 return true 消费事件。
- * Tab 屏幕永不卸载，useEffect 只需注册一次。
- * 多个 Tab 屏幕同时注册时，LIFO 顺序确保最近激活的处理器先触发，
- * 但所有 Tab 处理器行为相同（toast/exit），不会产生冲突。
- *
- * 行为：
- *   - 第一次按返回：Toast "再按一次退出应用"
- *   - 2 秒内再按：exitApp()
+ * Tab 根页面专用：Android 硬件返回键「再按一次退出应用」。
+ * 使用 useFocusEffect + BackHandler 确保只有当前聚焦的页面响应返回键，
+ * 失焦（切换 Tab / 进入子页面）时自动注销监听，避免多页面冲突。
  */
-import { useEffect, useRef } from 'react';
-import { BackHandler, Platform, ToastAndroid } from 'react-native';
+import { useCallback, useRef } from 'react';
+import { BackHandler, ToastAndroid, Platform } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 
 export function useAndroidExitBack() {
   const lastBackTime = useRef(0);
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      const now = Date.now();
-      if (now - lastBackTime.current < 2000) {
-        BackHandler.exitApp();
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return;
+
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        const now = Date.now();
+        if (now - lastBackTime.current < 2000) {
+          BackHandler.exitApp();
+          return true;
+        }
+        lastBackTime.current = now;
+        ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
         return true;
-      }
-      lastBackTime.current = now;
-      ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
-      return true;
-    });
-    return () => sub.remove();
-  }, []);
+      });
+
+      return () => {
+        sub.remove();
+        lastBackTime.current = 0;
+      };
+    }, [])
+  );
 }

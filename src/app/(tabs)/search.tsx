@@ -4,6 +4,7 @@ import {
   ScrollView, ActivityIndicator, Modal,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, X, SlidersHorizontal, Flame, ChevronDown, Check, RefreshCw } from 'lucide-react-native';
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/lib/database';
@@ -72,6 +73,8 @@ function filtersActive(f: FilterState): boolean {
 
 // ─── 主组件 ──────────────────────────────────────────────────────────────────
 export default function SearchTab() {
+  useAndroidExitBack();
+
   const inputRef = useRef<TextInput>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);

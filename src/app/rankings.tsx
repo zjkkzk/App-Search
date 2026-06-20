@@ -1,6 +1,7 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { queryCatalog } from '@/client/store';
@@ -25,6 +26,8 @@ const TIME_RANGES: { key: TimeRange; label: string }[] = [
 ];
 
 export default function RankingsScreen() {
+  useAndroidGoBack();
+
   const router = useRouter();
   const [activeRank, setActiveRank] = useState<RankType>('hot');
   const [activeTimeRange, setActiveTimeRange] = useState<TimeRange>('week');
