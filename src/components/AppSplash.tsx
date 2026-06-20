@@ -29,24 +29,18 @@ interface Props {
 
 export default function AppSplash({ initDone, onHidden }: Props) {
   const mountTimeRef = useRef(Date.now());
-  // 整体透明度：直接从 1 开始，无入场淡入，避免原生启动图隐藏后出现白屏间隙
+  // 整体透明度固定为 1，无入场动画，确保铺满屏幕无抖动
   const opacityAnim = useRef(new Animated.Value(1)).current;
-  const scaleAnim = useRef(new Animated.Value(0.94)).current;
   const dotsAnim = useRef(new Animated.Value(0)).current;
   const [visible, setVisible] = useState(true);
 
-  // 挂载后立即隐藏原生启动图（此时 AppSplash Modal 已在屏幕上，opacity=1，无白屏）
-  // 同步启动 logo 弹入动画和点状 loading
+  // 挂载后立即隐藏原生启动图（此时 AppSplash Modal 已全屏覆盖，无白屏）
   useEffect(() => {
     if (Platform.OS !== 'web') {
       SplashScreen.hideAsync().catch(() => {});
     }
 
-    // logo 弹入（scale 0.94→1），无 opacity 动画
-    Animated.spring(scaleAnim, {
-      toValue: 1, friction: 7, tension: 50, useNativeDriver: !isWeb,
-    }).start();
-
+    // 点状 loading 循环动画
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(dotsAnim, { toValue: 1, duration: 1200, useNativeDriver: !isWeb }),
@@ -92,13 +86,13 @@ export default function AppSplash({ initDone, onHidden }: Props) {
       hardwareAccelerated
     >
       <Animated.View style={[styles.container, { opacity: opacityAnim }]}>
-        <Animated.View style={[styles.content, { transform: [{ scale: scaleAnim }] }]}>
+        <View style={styles.content}>
           <View style={styles.iconWrapper}>
             <SvgXml xml={APP_ICON_SVG} width={ICON_SIZE} height={ICON_SIZE} />
           </View>
           <Text style={styles.appName}>开源应用商店</Text>
           <Text style={styles.explore}>发现 · 搜索 · 玩乐</Text>
-        </Animated.View>
+        </View>
 
         <View style={styles.footer}>
           <View style={styles.dotsRow}>
