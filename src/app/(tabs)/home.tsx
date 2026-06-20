@@ -113,7 +113,7 @@ export default function HomeTab() {
                 <Text style={{ color: '#AAAAAA', fontSize: 14 }}>搜索应用、开发工具…</Text>
               </Pressable>
               <Pressable
-                onPress={() => router.push('/downloads' as any)}
+                onPress={() => router.push({ pathname: '/downloads' as any, params: { tab: 'installed' } })}
                 style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff',
                   alignItems: 'center', justifyContent: 'center',
                   boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.06)' }] }}

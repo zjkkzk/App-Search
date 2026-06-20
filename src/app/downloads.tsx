@@ -10,7 +10,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView, AppState } from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,27 +36,35 @@ type TabKey = 'active' | 'done' | 'installed';
 
 // ── 进度环 ────────────────────────────────────────────────
 function ProgressCircle({ progress, status }: { progress: number; status: string }) {
-  const offset = CIRCUMFERENCE * (1 - Math.min(progress, 1));
+  // progress=-1 表示文件大小未知（服务端无 Content-Length），显示不定进度动画
+  const isIndeterminate = progress < 0 && status === 'downloading';
+  const offset = isIndeterminate ? 0 : CIRCUMFERENCE * (1 - Math.min(progress, 1));
   const color = status === 'failed' ? RED : status === 'completed' ? GREEN : BLUE;
   return (
     <View style={{ width: 44, height: 44 }}>
-      <Svg width={44} height={44} viewBox="0 0 44 44">
-        <Circle cx={22} cy={22} r={RADIUS} stroke="#EBEBEB" strokeWidth={3} fill="none" />
-        {progress > 0 && (
-          <Circle
-            cx={22} cy={22} r={RADIUS} stroke={color} strokeWidth={3} fill="none"
-            strokeDasharray={`${CIRCUMFERENCE} ${CIRCUMFERENCE}`} strokeDashoffset={offset}
-            strokeLinecap="round" rotation={-90} origin="22,22"
+      {isIndeterminate ? (
+        <ActivityIndicator size={44} color={BLUE} />
+      ) : (
+        <Svg width={44} height={44} viewBox="0 0 44 44">
+          <Circle cx={22} cy={22} r={RADIUS} stroke="#EBEBEB" strokeWidth={3} fill="none" />
+          {progress > 0 && (
+            <Circle
+              cx={22} cy={22} r={RADIUS} stroke={color} strokeWidth={3} fill="none"
+              strokeDasharray={`${CIRCUMFERENCE} ${CIRCUMFERENCE}`} strokeDashoffset={offset}
+              strokeLinecap="round" rotation={-90} origin="22,22"
+            />
+          )}
+        </Svg>
+      )}
+      {!isIndeterminate && (
+        <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons
+            name={status === 'completed' ? 'checkmark' : status === 'failed' ? 'close' :
+              status === 'paused' ? 'pause' : 'arrow-down'}
+            size={15} color={color}
           />
-        )}
-      </Svg>
-      <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-        <Ionicons
-          name={status === 'completed' ? 'checkmark' : status === 'failed' ? 'close' :
-            status === 'paused' ? 'pause' : 'arrow-down'}
-          size={15} color={color}
-        />
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -110,11 +118,14 @@ export default function DownloadsScreen() {
   useAndroidGoBack();
 
   const router = useRouter();
+  const { tab: initTab } = useLocalSearchParams<{ tab?: string }>();
   const { tasks, pause, resume, cancel, deleteFile, clearFinished, pauseAll, resumeAll, retry,
     safGranted, requestDownloadsPermission, refreshSafStatus } = useDownload();
   const { pendingCount, checking, refresh: refreshUpdateCount } = useUpdate();
 
-  const [tab, setTab] = useState<TabKey>('active');
+  const [tab, setTab] = useState<TabKey>(() =>
+    initTab === 'installed' || initTab === 'done' || initTab === 'active' ? initTab : 'active'
+  );
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [installedLoading, setInstalledLoading] = useState(false);
   const [notifStatus, setNotifStatus] = useState<'granted' | 'denied' | 'undetermined' | 'unavailable'>('undetermined');
@@ -191,7 +202,7 @@ export default function DownloadsScreen() {
 
   // ── 渲染：进行中任务行 ────────────────────────────────────
   const renderActiveItem = ({ item }: { item: DownloadTask }) => {
-    const pct = Math.round(item.progress * 100);
+    const pct = item.progress >= 0 ? Math.round(item.progress * 100) : null;
     const spd = formatSpeed(item.speed);
     const isFailed = item.status === 'failed';
     return (
@@ -206,7 +217,10 @@ export default function DownloadsScreen() {
             <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={1}>{item.filename}</Text>
             {item.status === 'downloading' && (
               <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>{pct}%</Text>
+                {pct != null
+                  ? <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>{pct}%</Text>
+                  : <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>下载中…</Text>
+                }
                 {spd ? <Text style={{ fontSize: 11, color: '#999' }}>{spd}</Text> : null}
                 {item.totalBytes > 0 && (
                   <Text style={{ fontSize: 11, color: '#BBB' }}>
@@ -247,9 +261,9 @@ export default function DownloadsScreen() {
             )}
           </View>
         </View>
-        {item.status === 'downloading' && item.totalBytes > 0 && (
+        {item.status === 'downloading' && item.totalBytes > 0 && pct != null && (
           <View style={{ height: 3, backgroundColor: '#F0F0F0', borderRadius: 2, marginTop: 10 }}>
-            <View style={{ width: `${pct}%`, height: '100%', backgroundColor: BLUE, borderRadius: 2 }} />
+            <View style={{ width: `${pct}%` as any, height: '100%', backgroundColor: BLUE, borderRadius: 2 }} />
           </View>
         )}
       </View>

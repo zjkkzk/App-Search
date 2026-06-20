@@ -92,6 +92,17 @@ async function moveToSafDownloads(tempUri: string, filename: string): Promise<st
   } catch { return tempUri; }
 }
 
+// ─── 预解析 302 跳转 URL（GitHub releases 均为 302 → objects.githubusercontent.com）──
+async function resolveRedirectUrl(url: string): Promise<string> {
+  try {
+    // 用 fetch HEAD 请求跟随跳转，取最终 URL
+    const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    if (res.url && res.url !== url) return res.url;
+    return url;
+  } catch {
+    return url; // 解析失败降级用原 URL
+  }
+}
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 export function getMimeType(filename: string): string {
   const lower = filename.toLowerCase();
@@ -229,6 +240,10 @@ async function startTask(id: string) {
   speedSampler.set(id, { ts: Date.now(), bytes: 0 });
   notify(task);
 
+  // 预解析 302 跳转（GitHub releases → objects.githubusercontent.com）
+  // 避免 expo-file-system 无法处理重定向链导致卡在 0%
+  const resolvedUrl = await resolveRedirectUrl(task.url);
+
   const progressCallback = (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
     const t = tasks.get(id);
     if (!t || t.status !== 'downloading') return;
@@ -246,8 +261,12 @@ async function startTask(id: string) {
     }
 
     t.bytesWritten = totalBytesWritten;
-    t.totalBytes = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : t.totalBytes;
-    t.progress = t.totalBytes > 0 ? totalBytesWritten / t.totalBytes : 0;
+    // totalBytesExpectedToWrite=-1 表示服务端未返回 Content-Length，保留已知值
+    if (totalBytesExpectedToWrite > 0) {
+      t.totalBytes = totalBytesExpectedToWrite;
+    }
+    // totalBytes=0 时（未知大小）进度设为 -1（UI 显示不定进度条），已知大小则正常计算
+    t.progress = t.totalBytes > 0 ? totalBytesWritten / t.totalBytes : -1;
     t.speed = speed > 0 ? speed : 0;
     t.eta = (speed > 0 && t.totalBytes > 0)
       ? Math.round((t.totalBytes - totalBytesWritten) / speed)
@@ -256,9 +275,10 @@ async function startTask(id: string) {
     notify(t);
   };
 
-  // 使用 resumeData（暂停后恢复）或直接下载
+  // 使用 resumeData（暂停后恢复）或直接下载（使用预解析的最终 URL）
+  const downloadUrl = task.resumeData ? task.url : resolvedUrl;
   const resumable = fs.createDownloadResumable(
-    task.url,
+    downloadUrl,
     localUri,
     {},
     progressCallback,
