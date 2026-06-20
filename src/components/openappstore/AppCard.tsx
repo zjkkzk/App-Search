@@ -3,6 +3,7 @@ import { View, Text, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import AppIcon from './AppIcon';
 import PlatformTag from './PlatformTag';
+import TranslatedText from './TranslatedText';
 import { Ionicons } from '@expo/vector-icons';
 import type { AppItem } from '@/types';
 
@@ -62,12 +63,12 @@ export default function AppCard({ app }: AppCardProps) {
 
           {/* 功能简介 */}
           {app.description ? (
-            <Text
+            <TranslatedText
               style={{ fontSize: 13, color: '#666666', lineHeight: 18 }}
               numberOfLines={2}
             >
               {app.description}
-            </Text>
+            </TranslatedText>
           ) : null}
 
           {/* 语言、平台标签、Star/Fork / 版本 */}

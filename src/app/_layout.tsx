@@ -6,6 +6,7 @@ import { View, Text, Pressable, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { initToken } from '@/lib/token';
 import { DownloadProvider } from '@/ctx/DownloadContext';
+import { TranslationProvider } from '@/ctx/TranslationContext';
 import AppSplash from '@/components/AppSplash';
 import "../global.css";
 
@@ -64,30 +65,32 @@ export default function RootLayout() {
   return (
     <ErrorBoundary>
       <DownloadProvider>
-        <SafeAreaProvider style={{ flex: 1 }}>
-          <StatusBar style="dark" backgroundColor="transparent" translucent={Platform.OS === 'android'} />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              animation: Platform.OS === 'android' ? 'fade_from_bottom' : Platform.OS === 'ios' ? 'default' : 'none',
-              gestureEnabled: true,
-            }}
-          >
-            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
-            <Stack.Screen name="detail" />
-            <Stack.Screen name="downloads" />
-            <Stack.Screen name="favorites" />
-            <Stack.Screen name="search-history" />
-            <Stack.Screen name="+not-found" />
-          </Stack>
-        </SafeAreaProvider>
-        {/* AppSplash 自管最短展示时长(1.8s) + 淡出动画，结束后自行卸载 */}
-        {showSplash && (
-          <AppSplash
-            initDone={initDone}
-            onHidden={() => setShowSplash(false)}
-          />
-        )}
+        <TranslationProvider>
+          <SafeAreaProvider style={{ flex: 1 }}>
+            <StatusBar style="dark" backgroundColor="transparent" translucent={Platform.OS === 'android'} />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                animation: Platform.OS === 'android' ? 'slide_from_right' : Platform.OS === 'ios' ? 'default' : 'none',
+                gestureEnabled: true,
+              }}
+            >
+              <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+              <Stack.Screen name="detail" />
+              <Stack.Screen name="downloads" />
+              <Stack.Screen name="favorites" />
+              <Stack.Screen name="search-history" />
+              <Stack.Screen name="+not-found" />
+            </Stack>
+          </SafeAreaProvider>
+          {/* AppSplash 自管最短展示时长(1.8s) + 淡出动画，结束后自行卸载 */}
+          {showSplash && (
+            <AppSplash
+              initDone={initDone}
+              onHidden={() => setShowSplash(false)}
+            />
+          )}
+        </TranslationProvider>
       </DownloadProvider>
     </ErrorBoundary>
   );

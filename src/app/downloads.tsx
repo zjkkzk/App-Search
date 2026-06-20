@@ -10,7 +10,7 @@
  * - 存储目录信息
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView } from 'react-native';
+import { View, Text, FlatList, Pressable, ActivityIndicator, Platform, ScrollView, AppState } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -438,7 +438,18 @@ export default function DownloadsScreen() {
         <Pressable
           onPress={async () => {
             const granted = await requestNotificationPermission();
-            setNotifStatus(granted ? 'granted' : 'denied');
+            if (granted) {
+              setNotifStatus('granted');
+            } else {
+              // 可能跳转了系统设置，监听应用回到前台后重新查询
+              const sub = AppState.addEventListener('change', async (state) => {
+                if (state === 'active') {
+                  sub.remove();
+                  const s = await getNotificationPermissionStatus();
+                  setNotifStatus(s);
+                }
+              });
+            }
           }}
           style={{ flexDirection: 'row', alignItems: 'center', gap: 8,
             backgroundColor: '#FFFBE6', paddingHorizontal: 16, paddingVertical: 10,

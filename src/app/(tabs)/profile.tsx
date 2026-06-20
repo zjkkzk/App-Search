@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, Linking, Platform } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, Linking, Platform, Switch } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,6 +15,8 @@ import { clearAllCache } from '@/lib/cache';
 import { getEventCounts } from '@/lib/events';
 import { useDownload } from '@/ctx/DownloadContext';
 import { getAllTasks, clearAllTasks } from '@/lib/downloadManager';
+import { useTranslation, type TargetLang } from '@/ctx/TranslationContext';
+import { clearTranslationCache } from '@/lib/translateApi';
 
 type ConfirmTarget = 'downloads' | 'token' | 'cache' | null;
 
@@ -127,6 +129,7 @@ export default function ProfileTab() {
 
   const router = useRouter();
   const { activeCount } = useDownload();
+  const { enabled: translateEnabled, targetLang, setEnabled: setTranslateEnabled, setTargetLang } = useTranslation();
 
   const [token, setTokenState] = useState('');
   const [githubExpanded, setGithubExpanded] = useState(false);
@@ -376,7 +379,78 @@ export default function ProfileTab() {
           )}
         </View>
 
-        {/* ════ 三、数据管理（缓存 + 下载记录，同属清理操作） ════ */}
+        {/* ════ 三、翻译服务 ════ */}
+        <SectionTitle title="翻译服务" />
+        <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 4 }}>
+          {/* 开关行 */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}>
+            <Ionicons name="language-outline" size={18} color="#1677FF" style={{ marginRight: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 14, color: '#1A1A1A', fontWeight: '500' }}>自动翻译</Text>
+              <Text style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
+                翻译屏幕内的非目标语言文字
+              </Text>
+            </View>
+            <Switch
+              value={translateEnabled}
+              onValueChange={setTranslateEnabled}
+              trackColor={{ false: '#E0E0E0', true: '#1677FF' }}
+              thumbColor="#fff"
+            />
+          </View>
+
+          {/* 目标语言选择（仅在启用时展示） */}
+          {translateEnabled && (
+            <>
+              <View style={{ height: 0.5, backgroundColor: '#F0F0F0', marginHorizontal: 16 }} />
+              <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+                <Text style={{ fontSize: 12, color: '#999', marginBottom: 10 }}>翻译目标语言</Text>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {([
+                    { value: 'zh' as TargetLang, label: '🇨🇳 中文', desc: '翻译所有非中文内容' },
+                    { value: 'en' as TargetLang, label: '🇺🇸 English', desc: '翻译所有非英文内容' },
+                  ]).map((item) => {
+                    const active = targetLang === item.value;
+                    return (
+                      <Pressable
+                        key={item.value}
+                        onPress={() => setTargetLang(item.value)}
+                        style={{
+                          flex: 1, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14,
+                          borderWidth: active ? 1.5 : 1,
+                          borderColor: active ? '#1677FF' : '#E8E8E8',
+                          backgroundColor: active ? '#EEF5FF' : '#FAFAFA',
+                          alignItems: 'center', gap: 4,
+                        }}
+                      >
+                        <Text style={{ fontSize: 16 }}>{item.label}</Text>
+                        <Text style={{ fontSize: 11, color: active ? '#1677FF' : '#999', textAlign: 'center' }}>
+                          {item.desc}
+                        </Text>
+                        {active && (
+                          <Ionicons name="checkmark-circle" size={14} color="#1677FF" />
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+              <View style={{ height: 0.5, backgroundColor: '#F0F0F0', marginHorizontal: 16 }} />
+              {/* 清除翻译缓存 */}
+              <Pressable
+                onPress={async () => { await clearTranslationCache(); }}
+                android_ripple={{ color: '#F5F5F5' }}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, gap: 10 }}
+              >
+                <Ionicons name="refresh-outline" size={16} color="#FA8C16" />
+                <Text style={{ flex: 1, fontSize: 14, color: '#555' }}>清除翻译缓存</Text>
+                <Ionicons name="chevron-forward" size={14} color="#CCC" />
+              </Pressable>
+            </>
+          )}
+        </View>
+
+        {/* ════ 四、数据管理 ════ */}
         <SectionTitle title="数据管理" />
         <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 4 }}>
           <CollapseHeader
@@ -418,7 +492,7 @@ export default function ProfileTab() {
           )}
         </View>
 
-        {/* ════ 四、关于（折叠） ════ */}
+        {/* ════ 五、关于（折叠） ════ */}
         <SectionTitle title="关于" />
         <View style={{ marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 4 }}>
           <CollapseHeader
