@@ -112,7 +112,7 @@ export default function DownloadsScreen() {
   const router = useRouter();
   const { tasks, pause, resume, cancel, deleteFile, clearFinished, pauseAll, resumeAll, retry,
     safGranted, requestDownloadsPermission, refreshSafStatus } = useDownload();
-  const { pendingCount, checking, recheckAll, refresh: refreshUpdateCount } = useUpdate();
+  const { pendingCount, checking, refresh: refreshUpdateCount } = useUpdate();
 
   const [tab, setTab] = useState<TabKey>('active');
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
@@ -454,15 +454,8 @@ export default function DownloadsScreen() {
               <Text style={{ color: RED, fontSize: 13, fontWeight: '500' }}>清除记录</Text>
             </Pressable>
           )}
-          {tab === 'installed' && (
-            <Pressable onPress={() => { recheckAll(); loadInstalled(); }}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, backgroundColor: '#F0F5FF' }}>
-              {checking
-                ? <ActivityIndicator size={13} color={BLUE} />
-                : <Ionicons name="refresh-outline" size={14} color={BLUE} />}
-              <Text style={{ fontSize: 13, color: BLUE, fontWeight: '500' }}>检查更新</Text>
-            </Pressable>
+          {tab === 'installed' && checking && (
+            <ActivityIndicator size={13} color={BLUE} style={{ marginRight: 6 }} />
           )}
         </View>
 

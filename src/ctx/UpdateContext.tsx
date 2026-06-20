@@ -1,9 +1,9 @@
 /**
  * UpdateContext
  * 管理"已安装应用"的更新检查状态：
- * - App 启动时自动检查一次更新
+ * - App 每次启动时强制检查所有已安装应用的最新版本
  * - 提供 pendingCount（待更新数量）给首页角标使用
- * - 提供 recheckAll() 供下载管理页手动触发
+ * - 提供 refresh() 供忽略更新后刷新角标
  */
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
@@ -16,8 +16,6 @@ interface UpdateContextValue {
   pendingCount: number;
   /** 正在检查更新 */
   checking: boolean;
-  /** 手动触发全量检查（忽略 last_checked 缓存） */
-  recheckAll: () => Promise<void>;
   /** 通知 context 某个 app 的 ignored_version 已更新，刷新 pendingCount */
   refresh: () => Promise<void>;
 }
@@ -92,15 +90,13 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refresh]);
 
-  const recheckAll = useCallback(() => checkAll(true), [checkAll]);
-
-  // App 启动时自动检查一次
+  // App 每次启动强制全量检查（忽略缓存，确保拿到最新版本号）
   useEffect(() => {
-    checkAll(false);
+    checkAll(true);
   }, []);
 
   return (
-    <UpdateContext.Provider value={{ pendingCount, checking, recheckAll, refresh }}>
+    <UpdateContext.Provider value={{ pendingCount, checking, refresh }}>
       {children}
     </UpdateContext.Provider>
   );
