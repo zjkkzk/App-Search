@@ -173,8 +173,11 @@ export default function ProfileTab() {
       // 最新云端 run_number（= CI 构建号，与 versionCode/version 中的 N 一致）
       const latestRunNumber: number = runsResp?.workflow_runs?.[0]?.run_number ?? 0;
 
-      // 本地安装版本的构建号（nativeBuildVersion = versionCode = run_number）
-      const localBuild = parseInt(Constants.nativeBuildVersion ?? '0', 10);
+      // 本地安装版本的构建号
+      // 优先从 nativeApplicationVersion（"1.0.472"）末位提取，因为 CI 版本格式固定为 1.0.{run_number}
+      // nativeBuildVersion 在 Android 上有时返回 null，不可靠
+      const appVerStr = Constants.nativeApplicationVersion ?? Constants.expoConfig?.version ?? '1.0.0';
+      const localBuild = parseInt(appVerStr.split('.').pop() ?? '0', 10);
 
       // 展示标签：用发布日期（release name 中含日期）或构建号
       const releaseName: string = runsResp?.workflow_runs?.[0]?.created_at ?? '';
