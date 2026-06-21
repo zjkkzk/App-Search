@@ -420,7 +420,10 @@ export default function DetailScreen() {
                     style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 8 }}>
                     <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: relIdx === 0 ? '#52C41A' : '#D9D9D9' }} />
                     <Text style={{ flex: 1, fontSize: 14, fontWeight: '700', color: '#1A1A1A' }}>
-                      最新版本 {rel.tag_name}
+                      {relIdx === 0 ? '最新版本' : '历史版本'}{' '}
+                      {rel.tag_name === 'latest'
+                        ? `${rel.published_at?.slice(0, 10).replace(/-/g, '/') ?? 'latest'} 构建`
+                        : rel.tag_name}
                     </Text>
                     <Text style={{ fontSize: 12, color: '#AAA' }}>{rel.published_at?.slice(0, 10).replace(/-/g, '/')}</Text>
                     <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#AAA" />
@@ -532,7 +535,10 @@ export default function DetailScreen() {
           {[
             { icon: 'document-text-outline' as const, color: '#1677FF', label: '许可证', value: app.license || '未知' },
             { icon: 'time-outline' as const, color: '#00B96B', label: '最近更新', value: app.updated_at ? app.updated_at.slice(0, 10).replace(/-/g, '/') : '-' },
-            { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本', value: releases[0]?.tag_name || '-' },
+            { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本',
+              value: releases[0]?.tag_name === 'latest'
+                ? `${releases[0]?.published_at?.slice(0, 10).replace(/-/g, '/') ?? '-'} 构建`
+                : (releases[0]?.tag_name || '-') },
             { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间', value: releases[0]?.published_at ? releases[0].published_at.slice(0, 10).replace(/-/g, '/') : '-' },
           ].map((row) => (
             <View key={row.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
