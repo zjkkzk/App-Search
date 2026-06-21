@@ -5,7 +5,6 @@ import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveToken, getToken, clearToken } from '@/lib/token';
 import {
   getFavoriteStats,
@@ -19,9 +18,6 @@ import { useDownload } from '@/ctx/DownloadContext';
 import { getAllTasks, clearAllTasks } from '@/lib/downloadManager';
 import { useTranslation, type TargetLang } from '@/ctx/TranslationContext';
 import { clearTranslationCache } from '@/lib/translateApi';
-
-/** AsyncStorage key：记录最后一次成功安装的 APK 文件名 */
-const SELF_UPDATE_KEY = 'self_update_installed_filename';
 
 type ConfirmTarget = 'downloads' | 'token' | 'cache' | null;
 
@@ -150,57 +146,52 @@ export default function ProfileTab() {
   const [updateAssets, setUpdateAssets] = useState<{ name: string; url: string; size: number }[]>([]);
 
   /**
-   * 检测更新核心逻辑：
-   * 1. 拉取最新 release，获取 installable assets
-   * 2. 从 AsyncStorage 读取上次通过本应用安装的 APK 文件名
-   * 3. 若已记录文件名 === 最新 release 的 asset 文件名 → 已是最新
-   * 4. 若无记录：用 app.json version 中的 build 号（1.0.N → N）与 release published_at 推断
-   *    - release published_at 对应的构建号 ≤ 当前 build 号 → 已是最新
-   *    - 否则 → 有新版本
-   * 5. 下载完成后把 asset 文件名写入 AsyncStorage，供下次比对
+   * 检测更新核心逻辑（可靠方案）：
+   * 1. 从 GitHub Actions API 获取最新成功构建的 run_number
+   * 2. 与本地 nativeBuildVersion（= CI run_number，由构建脚本写入 versionCode）比对
+   * 3. 本地 >= 云端 → 已是最新；否则 → 有新版本可下载
+   * 不依赖 AsyncStorage / 文件名 / tag 字符串，彻底解决误报问题
    */
   const checkAppUpdate = async () => {
     setUpdateCheck('checking');
     setLatestVersion(null);
     setUpdateAssets([]);
     try {
-      const releases = await fetchReleases('qq5855144', 'App-Search', 1, true);
+      // ── 并行拉取 release assets 和最新构建 run_number ──────
+      const [releases, runsResp] = await Promise.all([
+        fetchReleases('qq5855144', 'App-Search', 1, true),
+        fetch(
+          'https://api.github.com/repos/qq5855144/App-Search/actions/workflows/build-android.yml/runs?status=success&per_page=1',
+          { headers: { Accept: 'application/vnd.github+json' } },
+        ).then((r) => r.json()).catch(() => null),
+      ]);
+
       if (!releases.length) { setUpdateCheck('error'); return; }
       const release = releases[0];
       const installable = filterInstallAssets(release.assets);
 
-      // 展示用版本标签（去掉 v 前缀；若 tag 是 "latest" 则显示发布日期）
-      const rawTag = release.tag_name.replace(/^v/i, '');
-      const displayTag = rawTag === 'latest'
-        ? new Date(release.published_at || '').toLocaleDateString('zh-CN')
-        : rawTag;
-      setLatestVersion(displayTag);
+      // 最新云端 run_number（= CI 构建号，与 versionCode/version 中的 N 一致）
+      const latestRunNumber: number = runsResp?.workflow_runs?.[0]?.run_number ?? 0;
+
+      // 本地安装版本的构建号（nativeBuildVersion = versionCode = run_number）
+      const localBuild = parseInt(Constants.nativeBuildVersion ?? '0', 10);
+
+      // 展示标签：用发布日期（release name 中含日期）或构建号
+      const releaseName: string = runsResp?.workflow_runs?.[0]?.created_at ?? '';
+      const displayTag = latestRunNumber > 0
+        ? `v1.0.${latestRunNumber}`
+        : (release.tag_name !== 'latest' ? release.tag_name : new Date(releaseName).toLocaleDateString('zh-CN'));
+      setLatestVersion(displayTag.replace(/^v/i, ''));
       setUpdateAssets(installable.map((a) => ({
         name: a.name,
         url: a.browser_download_url,
         size: a.size,
       })));
 
-      // ── 判断是否已是最新 ───────────────────────────────────
-      let isLatest = false;
-
-      // 策略 A：AsyncStorage 记录了上次安装的 APK 文件名 → 直接比文件名
-      const storedFilename = await AsyncStorage.getItem(SELF_UPDATE_KEY).catch(() => null);
-      if (storedFilename && installable.length > 0) {
-        isLatest = installable.some((a) => a.name === storedFilename);
-      } else if (installable.length > 0) {
-        // 策略 B：无记录 → 检查下载任务里是否有相同文件名的已完成任务
-        const completedFilenames = new Set(
-          getAllTasks().filter((t) => t.status === 'completed').map((t) => t.filename),
-        );
-        isLatest = installable.every((a) => completedFilenames.has(a.name));
-      } else if (!installable.length) {
-        // 无可安装包：tag 是语义版本则比版本号，否则无法判断
-        if (rawTag.includes('.')) {
-          isLatest = rawTag === appVersion;
-        }
-      }
-
+      // 核心判断：本地构建号 >= 最新云端构建号 → 已是最新
+      const isLatest = latestRunNumber > 0
+        ? localBuild >= latestRunNumber
+        : false; // 无法获取 run_number 时保守显示"有更新"
       setUpdateCheck(isLatest ? 'latest' : 'update_available');
     } catch {
       setUpdateCheck('error');
@@ -218,8 +209,6 @@ export default function ProfileTab() {
       avatarUrl: '',
       version: latestVersion ?? '',
     });
-    // 记录本次下载的 APK 文件名，供下次检测更新比对
-    await AsyncStorage.setItem(SELF_UPDATE_KEY, asset.name).catch(() => {});
     router.push('/downloads' as any);
   };
   const tokenInputRef = useRef<TextInput>(null);
