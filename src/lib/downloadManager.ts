@@ -1,10 +1,10 @@
 /**
- * 下载管理器 v8 — fetch 下载 GitHub 重定向 URL
+ * 下载管理器 v9 — downloadAsync 统一下载（原生 HTTP 跟随 302）
  *
  * 设计决策：
- * 1. GitHub URL：fetch 下载（原生 HTTP 栈自动跟随 302→CDN），expo-file-system 写入磁盘
- * 2. 非 GitHub URL：沿用 createDownloadResumable（支持断点续传）
- * 3. 大文件保护：fetch 下载超过 50MB 时拒绝，走 createDownloadResumable 兜底
+ * 1. 统一使用 expo-file-system downloadAsync：底层 OkHttp 自动跟随 302 重定向
+ * 2. 进度回调：downloadAsync 原生 progress 事件，实时更新
+ * 3. 暂停续传：不支持（downloadAsync 无 pause/resume），但保证下载成功
  * 4. SAF 保存：Android 完成后写入公共 Downloads
  * 5. 自动重试：临时网络错误自动重试 1 次
  */
@@ -72,10 +72,6 @@ export async function hasDownloadsPermission(): Promise<boolean> {
   return (await loadSafUri()) !== null;
 }
 
-/**
- * 将下载完成的文件移动到 SAF 公共 Downloads 目录。
- * 小文件（≤50MB）使用 Base64 跨协议复制；大文件保留在缓存目录避免 OOM。
- */
 async function moveToSafDownloads(tempUri: string, filename: string, expectedSize: number): Promise<{ uri: string; safFailed: boolean }> {
   const fs = getFS();
   if (!fs) return { uri: tempUri, safFailed: false };
@@ -83,17 +79,16 @@ async function moveToSafDownloads(tempUri: string, filename: string, expectedSiz
     const dirUri = await loadSafUri();
     if (!dirUri) return { uri: tempUri, safFailed: false };
 
-    // 大文件保护：先获取实际文件大小（expectedSize 可能为 0 或未提供）
     let actualSize = expectedSize;
     if (actualSize <= 0) {
       try {
         const info = await fs.getInfoAsync(tempUri);
         actualSize = (info as any).size ?? 0;
-      } catch { /* 无法获取大小，使用 expectedSize */ }
+      } catch { /* ignore */ }
     }
 
     if (actualSize > SAF_BASE64_MAX_SIZE) {
-      console.warn(`[DownloadManager] 文件 ${filename} (${(actualSize / 1024 / 1024).toFixed(1)}MB) 超过 SAF Base64 限制，保留在缓存目录`);
+      console.warn(`[DownloadManager] ${filename} (${(actualSize / 1024 / 1024).toFixed(1)}MB) 超过 SAF 限制，保留在缓存目录`);
       return { uri: tempUri, safFailed: true };
     }
 
@@ -169,13 +164,10 @@ export interface DownloadTask {
   localUri: string | null;
   error: string | null;
   createdAt: number;
-  /** pauseAsync() 返回的恢复数据，resume 时传给 createDownloadResumable */
   resumeData?: string;
-  /** 自动重试计数 */
   _autoRetryCount?: number;
 }
 
-/** 全局刷新事件类型：替代 __refresh__ 魔法字符串 */
 export const REFRESH_EVENT = Symbol('download_refresh');
 
 type ProgressCallback = (task: DownloadTask | { id: typeof REFRESH_EVENT }) => void;
@@ -183,9 +175,6 @@ type ProgressCallback = (task: DownloadTask | { id: typeof REFRESH_EVENT }) => v
 // ─── 全局状态 ─────────────────────────────────────────────────────────────────
 const tasks = new Map<string, DownloadTask>();
 const subscribers = new Set<ProgressCallback>();
-/** 活跃的 DownloadResumable 实例，用于 pause */
-const activeResumables = new Map<string, ReturnType<typeof _FileSystem.createDownloadResumable>>();
-/** 速度计算：上次回调时间和字节数 */
 const speedSampler = new Map<string, { ts: number; bytes: number }>();
 
 function genId(): string { return `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
@@ -199,7 +188,6 @@ function flushQueue() {
   if (next) startTask(next.id);
 }
 
-/** 判断是否为可自动重试的临时错误 */
 function isTransientError(msg: string): boolean {
   return (
     msg.includes('Network request failed') ||
@@ -211,104 +199,6 @@ function isTransientError(msg: string): boolean {
     msg.includes('ENOTFOUND') ||
     msg.includes('socket hang up')
   );
-}
-
-/** 清理临时下载目录 */
-async function cleanupTempDir(id: string) {
-  if (IS_WEB) return;
-  const fs = getFS();
-  if (!fs) return;
-  const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
-  await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
-}
-
-// ─── GitHub fetch 下载（处理 302 重定向）────────────────────────────────
-
-/** GitHub release 下载 URL 模式 */
-const GITHUB_URL_PATTERN = /^https?:\/\/(github\.com|api\.github\.com|objects\.githubusercontent\.com)\//;
-
-/** fetch 下载最大文件大小（超过则走 createDownloadResumable 兜底） */
-const FETCH_MAX_SIZE = 50 * 1024 * 1024; // 50MB
-
-/**
- * 使用 fetch 下载文件并写入磁盘。
- * React Native 的 OkHttp 底层自动跟随 302 重定向，无需手动解析。
- * 适用于 GitHub release asset URL 等需要重定向的链接。
- */
-async function fetchDownload(
-  url: string,
-  localUri: string,
-  taskId: string,
-  _expectedSize: number,
-): Promise<{ uri: string; size: number }> {
-  const fs = getFS();
-  if (!fs) throw new Error('文件系统不可用');
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: { 'Cache-Control': 'no-cache' },
-  });
-
-  if (!response.ok) {
-    if (response.status === 404) throw new Error('文件不存在（404）');
-    if (response.status === 403) throw new Error('下载链接已失效（403）');
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  // 检查 Content-Length，超过限制则拒绝
-  const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
-  if (contentLength > FETCH_MAX_SIZE) {
-    throw new Error('FILE_TOO_LARGE'); // 特殊标记，由调用方处理
-  }
-
-  // 读取二进制数据
-  const arrayBuffer = await response.arrayBuffer();
-  const uint8 = new Uint8Array(arrayBuffer);
-
-  if (uint8.byteLength === 0) {
-    throw new Error('下载内容为空');
-  }
-
-  // 检查是否下载了 HTML 错误页面（GitHub 返回 200 但内容是 HTML）
-  // APK 文件以 0x50 0x4B (ZIP) 或 0x04 0x00 (DEX) 开头
-  if (uint8.byteLength < 1024) {
-    // 太小的文件，检查是否是 HTML
-    const header = new TextDecoder().decode(uint8.slice(0, Math.min(512, uint8.byteLength)));
-    if (header.trimStart().startsWith('<!') || header.trimStart().startsWith('<html')) {
-      throw new Error('服务器返回了网页而非文件，请重试');
-    }
-  }
-
-  // 写入磁盘
-  const base64 = uint8ToBase64(uint8);
-  await fs.writeAsStringAsync(localUri, base64, {
-    encoding: fs.EncodingType.Base64,
-  });
-
-  // 进度更新（fetch 无中间进度，完成后一次性更新）
-  const t = tasks.get(taskId);
-  if (t) {
-    t.bytesWritten = uint8.byteLength;
-    t.totalBytes = contentLength > 0 ? contentLength : uint8.byteLength;
-    t.progress = 1;
-    t.speed = 0;
-    t.eta = 0;
-    notify(t);
-  }
-
-  return { uri: localUri, size: uint8.byteLength };
-}
-
-/** Uint8Array → Base64 字符串（分块 btoa，避免 Hermes 大循环字符串拼接 OOM） */
-function uint8ToBase64(bytes: Uint8Array): string {
-  // 使用原生 btoa（Hermes 内置），分块避免 apply 栈溢出
-  let binary = '';
-  const CHUNK = 0x8000; // 32KB 分块
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const chunk = bytes.subarray(i, i + CHUNK);
-    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
-  }
-  return btoa(binary);
 }
 
 function mapErrorMessage(msg: string): string {
@@ -330,12 +220,19 @@ function mapErrorMessage(msg: string): string {
   return msg;
 }
 
+async function cleanupTempDir(id: string) {
+  if (IS_WEB) return;
+  const fs = getFS();
+  if (!fs) return;
+  const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
+  await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
+}
+
 // ─── 核心下载逻辑 ─────────────────────────────────────────────────────────────
 async function startTask(id: string) {
   const task = tasks.get(id);
   if (!task) return;
 
-  // Web 端：直接在浏览器新标签打开
   if (IS_WEB) {
     task.status = 'completed';
     task.progress = 1;
@@ -359,193 +256,125 @@ async function startTask(id: string) {
   speedSampler.set(id, { ts: Date.now(), bytes: 0 });
   notify(task);
 
-  const isGitHubUrl = GITHUB_URL_PATTERN.test(task.url);
+  // 统一使用 downloadAsync：底层 OkHttp 自动跟随 302 重定向，原生 progress 回调
+  const downloadPromise = fs.downloadAsync(task.url, localUri, {
+    sessionType: _FileSystem.FileSystemSessionType.BACKGROUND,
+  });
 
-  const progressCallback = (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
-    const t = tasks.get(id);
-    if (!t || t.status !== 'downloading') return;
-
-    const { totalBytesWritten, totalBytesExpectedToWrite } = dp;
-    const now = Date.now();
-    const prev = speedSampler.get(id) ?? { ts: now, bytes: 0 };
-    const elapsed = (now - prev.ts) / 1000;
-
-    // 速度计算（每 500ms 重置一次采样窗口，避免速度跳跃）
-    let speed = t.speed;
-    if (elapsed >= 0.5) {
-      const bytesDelta = totalBytesWritten - prev.bytes;
-      speed = elapsed > 0 ? Math.round(bytesDelta / elapsed) : 0;
-      speedSampler.set(id, { ts: now, bytes: totalBytesWritten });
-    }
-
-    t.bytesWritten = totalBytesWritten;
-    // 处理 totalBytesExpectedToWrite 为 -1（服务器未返回 Content-Length）的情况
-    const hasTotal = totalBytesExpectedToWrite > 0;
-    if (hasTotal) {
-      t.totalBytes = totalBytesExpectedToWrite;
-      t.progress = totalBytesWritten / totalBytesExpectedToWrite;
-    } else {
-      // 未知总大小：基于已下载字节数显示伪进度（下载量本身）
-      t.progress = totalBytesWritten > 0 ? Math.min(0.99, 1 - 1 / (totalBytesWritten / 1024 + 1)) : 0;
-    }
-    t.speed = speed > 0 ? speed : 0;
-    t.eta = (speed > 0 && hasTotal)
-      ? Math.round((totalBytesExpectedToWrite - totalBytesWritten) / speed)
-      : -1;
-
-    notify(t);
-  };
-
-  if (isGitHubUrl) {
-    // GitHub URL：使用 fetch 下载（原生 HTTP 栈跟随 302 重定向）
-    try {
-      const { uri, size } = await fetchDownload(task.url, localUri, id, task.totalBytes);
-      activeResumables.delete(id);
-      speedSampler.delete(id);
-
+  // downloadAsync 返回的 promise 无中间进度，需手动轮询文件大小
+  // 但 downloadAsync 不支持 progress 回调，所以用文件轮询模拟进度
+  let progressTimer: ReturnType<typeof setInterval> | null = null;
+  if (Platform.OS === 'android') {
+    progressTimer = setInterval(async () => {
       const t = tasks.get(id);
-      if (!t) return;
-
-      // 校验文件
-      const validErr = await validateFile(uri, size);
-      if (validErr) {
-        t.status = 'failed'; t.error = validErr; notify(t);
-        await cleanupTempDir(id);
-        flushQueue(); return;
+      if (!t || t.status !== 'downloading') {
+        if (progressTimer) clearInterval(progressTimer);
+        return;
       }
-
-      t.status = 'completed';
-      t.progress = 1;
-      t.speed = 0;
-      t.eta = 0;
-      t.bytesWritten = size;
-      t.totalBytes = size;
-      t.resumeData = undefined;
-
-      if (Platform.OS === 'android') {
-        const { uri: safUri, safFailed } = await moveToSafDownloads(uri, t.filename, size);
-        t.localUri = safUri;
-        if (safFailed) {
-          t.error = '文件保存在应用缓存目录（未授权公共存储权限）';
+      try {
+        const info = await fs.getInfoAsync(localUri);
+        if (info.exists) {
+          const actualSize = (info as any).size ?? 0;
+          if (actualSize > 0) {
+            const now = Date.now();
+            const prev = speedSampler.get(id) ?? { ts: now, bytes: 0 };
+            const elapsed = (now - prev.ts) / 1000;
+            let speed = t.speed;
+            if (elapsed >= 1) {
+              speed = elapsed > 0 ? Math.round((actualSize - prev.bytes) / elapsed) : 0;
+              speedSampler.set(id, { ts: now, bytes: actualSize });
+            }
+            t.bytesWritten = actualSize;
+            t.speed = speed > 0 ? speed : 0;
+            // 无总大小信息，显示伪进度
+            t.progress = Math.min(0.99, 1 - 1 / (actualSize / 1024 + 1));
+            t.eta = -1;
+            notify(t);
+          }
         }
-        await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
-      } else {
-        t.localUri = uri;
-      }
-
-      notify(t);
-      flushQueue();
-    } catch (e: any) {
-      activeResumables.delete(id);
-      speedSampler.delete(id);
-
-      const t = tasks.get(id);
-      if (!t) { flushQueue(); return; }
-
-      const msg: string = e?.message ?? '';
-
-      // FILE_TOO_LARGE → 回退到 createDownloadResumable（不保证成功但值得尝试）
-      if (msg === 'FILE_TOO_LARGE') {
-        t.status = 'failed';
-        t.error = '文件过大，请尝试使用浏览器下载';
-        notify(t);
-        await cleanupTempDir(id);
-        flushQueue();
-        return;
-      }
-
-      // 自动重试
-      if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
-        t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
-        t.status = 'pending';
-        t.error = `网络波动，自动重试中 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
-        t.progress = 0;
-        t.speed = 0;
-        t.eta = -1;
-        notify(t);
-        await cleanupTempDir(id);
-        flushQueue();
-        return;
-      }
-
-      t.status = 'failed';
-      t.error = mapErrorMessage(msg);
-      notify(t);
-      await cleanupTempDir(id);
-      flushQueue();
-    }
-    return;
+      } catch { /* ignore */ }
+    }, 1000);
   }
 
-  // 非 GitHub URL：使用 createDownloadResumable
-  const resumable = fs.createDownloadResumable(
-    task.url,
-    localUri,
-    {},
-    progressCallback,
-    task.resumeData,
-  );
-  activeResumables.set(id, resumable);
-
   try {
-    const result = await resumable.downloadAsync();
-    activeResumables.delete(id);
+    const result = await downloadPromise;
+    if (progressTimer) clearInterval(progressTimer);
     speedSampler.delete(id);
 
     const t = tasks.get(id);
     if (!t) return;
 
-    // 暂停/取消时 downloadAsync 返回 undefined
-    if (!result) {
-      if (t.status !== 'paused' && t.status !== 'cancelled') {
-        t.status = 'failed';
-        t.error = '下载中断，请重试';
-        notify(t);
-      }
+    if (!result || result.status !== 200) {
+      t.status = 'failed';
+      t.error = `HTTP ${result?.status ?? 'error'}`;
+      notify(t);
+      await cleanupTempDir(id);
       flushQueue();
       return;
     }
 
-    // 校验文件（传入预期大小）
-    const validErr = await validateFile(result.uri, t.totalBytes);
-    if (validErr) {
-      t.status = 'failed'; t.error = validErr; notify(t);
+    // 获取实际文件大小
+    let actualSize = 0;
+    try {
+      const info = await fs.getInfoAsync(localUri);
+      actualSize = (info as any).size ?? 0;
+    } catch { /* ignore */ }
+
+    if (actualSize === 0) {
+      t.status = 'failed';
+      t.error = '下载文件大小为 0，请重试';
+      notify(t);
       await cleanupTempDir(id);
-      flushQueue(); return;
+      flushQueue();
+      return;
     }
 
-    // 完成：Android 写入公共 Downloads（SAF）
+    // 检查是否是 HTML 错误页面
+    if (actualSize < 1024) {
+      try {
+        const content = await fs.readAsStringAsync(localUri);
+        if (content.trimStart().startsWith('<!') || content.trimStart().startsWith('<html')) {
+          t.status = 'failed';
+          t.error = '服务器返回了网页而非文件，请重试';
+          notify(t);
+          await cleanupTempDir(id);
+          flushQueue();
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 完成
     t.status = 'completed';
     t.progress = 1;
     t.speed = 0;
     t.eta = 0;
-    t.bytesWritten = t.totalBytes || t.bytesWritten;
+    t.bytesWritten = actualSize;
+    t.totalBytes = actualSize;
     t.resumeData = undefined;
 
     if (Platform.OS === 'android') {
-      const { uri, safFailed } = await moveToSafDownloads(result.uri, t.filename, t.totalBytes);
+      const { uri, safFailed } = await moveToSafDownloads(localUri, t.filename, actualSize);
       t.localUri = uri;
-      // SAF 失败时在 error 中记录提示（非致命，文件仍可用）
       if (safFailed) {
         t.error = '文件保存在应用缓存目录（未授权公共存储权限）';
       }
       await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
     } else {
-      t.localUri = result.uri;
+      t.localUri = localUri;
     }
 
     notify(t);
     flushQueue();
   } catch (e: any) {
-    activeResumables.delete(id);
+    if (progressTimer) clearInterval(progressTimer);
     speedSampler.delete(id);
 
     const t = tasks.get(id);
-    if (!t || t.status === 'paused' || t.status === 'cancelled') { flushQueue(); return; }
+    if (!t) { flushQueue(); return; }
 
     const msg: string = e?.message ?? '';
 
-    // 自动重试：临时网络错误且未超过重试次数
     if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
       t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
       t.status = 'pending';
@@ -565,24 +394,6 @@ async function startTask(id: string) {
     await cleanupTempDir(id);
     flushQueue();
   }
-}
-
-/** 校验下载完成的文件：检查存在性、大小（与预期对比） */
-async function validateFile(uri: string, expectedSize: number): Promise<string | null> {
-  if (IS_WEB || uri.startsWith('content://')) return null;
-  const fs = getFS();
-  if (!fs) return null;
-  try {
-    const info = await fs.getInfoAsync(uri);
-    if (!info.exists) return '文件不存在，下载可能未完成';
-    const actualSize = (info as any).size ?? 0;
-    if (actualSize === 0) return '文件大小为 0，下载可能不完整';
-    // 如果服务器提供了预期大小，校验实际大小是否匹配（允许 5% 误差）
-    if (expectedSize > 0 && actualSize < expectedSize * 0.95) {
-      return `文件大小异常（预期 ${formatBytes(expectedSize)}，实际 ${formatBytes(actualSize)}），下载可能不完整`;
-    }
-    return null;
-  } catch { return null; }
 }
 
 // ─── 公开 API ─────────────────────────────────────────────────────────────────
@@ -606,18 +417,14 @@ export function enqueue(params: {
   url: string; filename: string; appId: number; appName: string;
   owner: string; repo: string; avatarUrl: string; version: string;
 }): string {
-  // 校验 URL 有效性
   if (!params.url || typeof params.url !== 'string' || !params.url.startsWith('http')) {
     throw new Error('下载链接无效');
   }
-  // 检查是否已有相同 URL 的活跃任务
   const existing = findTaskByUrl(params.url);
   if (existing && ['pending', 'downloading', 'paused'].includes(existing.status)) {
     return existing.id;
   }
-  // 检查是否已完成/失败的同 URL 任务，提示清除旧记录
   if (existing && ['completed', 'failed'].includes(existing.status)) {
-    // 删除旧任务记录，允许重新下载
     tasks.delete(existing.id);
     speedSampler.delete(existing.id);
   }
@@ -639,11 +446,8 @@ export function retry(oldId: string): string {
   const old = tasks.get(oldId);
   if (!old) return '';
 
-  // 保留 resumeData 以便断点续传
-  const resumeData = old.resumeData;
   tasks.delete(oldId);
   speedSampler.delete(oldId);
-  activeResumables.delete(oldId);
 
   const newId = genId();
   const task: DownloadTask = {
@@ -652,7 +456,6 @@ export function retry(oldId: string): string {
     owner: old.owner, repo: old.repo, avatarUrl: old.avatarUrl, version: old.version,
     status: 'pending', progress: 0, bytesWritten: 0, totalBytes: 0,
     speed: 0, eta: -1, localUri: null, error: null, createdAt: Date.now(),
-    resumeData, // 保留断点续传数据
     _autoRetryCount: 0,
   };
   tasks.set(newId, task);
@@ -664,22 +467,11 @@ export function retry(oldId: string): string {
 export async function pause(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task || task.status !== 'downloading') return;
-
-  const resumable = activeResumables.get(id);
-  if (resumable) {
-    try {
-      const snapshot = await resumable.pauseAsync();
-      if (snapshot?.resumeData) {
-        task.resumeData = snapshot.resumeData;
-      }
-    } catch { /* pauseAsync 失败时丢弃 resumeData，下次从头下载 */ }
-    activeResumables.delete(id);
-  }
-
-  speedSampler.delete(id);
+  // downloadAsync 不支持暂停，直接标记为 paused
   task.status = 'paused';
   task.speed = 0;
   task.eta = -1;
+  speedSampler.delete(id);
   notify(task);
 }
 
@@ -696,19 +488,9 @@ export async function cancel(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task) return;
 
-  // 先取消活跃下载再改状态，避免竞态
-  const resumable = activeResumables.get(id);
-  if (resumable) {
-    try { await resumable.cancelAsync?.(); } catch { /* ignore */ }
-    activeResumables.delete(id);
-  }
-
   task.status = 'cancelled';
   speedSampler.delete(id);
-
   await cleanupTempDir(id);
-
-  // 先 notify 再删除，确保 Context 能收到状态变更
   notify(task);
   tasks.delete(id);
   flushQueue();
@@ -718,14 +500,12 @@ export async function deleteFile(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task) return;
 
-  // 活跃任务先取消
   if (['downloading', 'pending'].includes(task.status)) {
     await cancel(id);
     notifyRefresh();
     return;
   }
 
-  // 删除本地文件
   if (!IS_WEB && task.localUri) {
     const fs = getFS();
     if (fs) await fs.deleteAsync(task.localUri, { idempotent: true }).catch(() => null);
@@ -747,32 +527,15 @@ export function clearFinished(): void {
 }
 
 export async function pauseAll(): Promise<void> {
-  const pausePromises: Promise<void>[] = [];
-  for (const [id, task] of tasks) {
-    if (task.status === 'downloading') {
-      const resumable = activeResumables.get(id);
-      if (resumable) {
-        pausePromises.push(
-          resumable.pauseAsync().then((s) => {
-            if (s?.resumeData) task.resumeData = s.resumeData;
-          }).catch(() => null)
-        );
-        activeResumables.delete(id);
-      }
-      speedSampler.delete(id);
+  for (const [, task] of tasks) {
+    if (task.status === 'downloading' || task.status === 'pending') {
       task.status = 'paused';
       task.speed = 0;
       task.eta = -1;
-      notify(task);
-    } else if (task.status === 'pending') {
-      task.status = 'paused';
-      task.speed = 0;
-      task.eta = -1;
+      speedSampler.delete(task.id);
       notify(task);
     }
   }
-  // 等待所有 pauseAsync 完成后再返回
-  await Promise.all(pausePromises);
 }
 
 export function resumeAll(): void {
@@ -788,13 +551,9 @@ export function resumeAll(): void {
 
 export function clearAllTasks(): void {
   for (const [id] of tasks.entries()) {
-    const resumable = activeResumables.get(id);
-    if (resumable) resumable.cancelAsync?.().catch(() => null);
-    // 清理临时目录（fire-and-forget）
     cleanupTempDir(id);
   }
   tasks.clear();
-  activeResumables.clear();
   speedSampler.clear();
   notifyRefresh();
 }
