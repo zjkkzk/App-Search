@@ -9,9 +9,11 @@
  * 5. 下载完成时自动记录到 installed_apps，触发更新检查
  */
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
+import Constants from 'expo-constants';
 import {
   getInstalledApps, upsertInstalledApp, updateInstalledLatest,
+  updateInstalledVersionByRepo,
   type InstalledApp,
 } from '@/lib/database';
 import { fetchLatestReleaseTag, normalizeVersion, isVersionOlder } from '@/lib/github';
@@ -215,6 +217,19 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     });
     return unsub;
   }, [refresh]);
+
+  // 启动时同步本体版本号：外部安装新版本后，更新本地 installed_version
+  // 避免 installed_apps 表中记录旧版本导致的误报更新通知
+  useEffect(() => {
+    const selfOwner = 'qq5855144';
+    const selfRepo = 'App-Search';
+    const currentVersion = Constants.nativeApplicationVersion
+      ?? Constants.expoConfig?.version
+      ?? '1.0.0';
+    updateInstalledVersionByRepo(selfOwner, selfRepo, currentVersion)
+      .then(() => refresh())
+      .catch(() => {});
+  }, []);
 
   // 清理定时器
   useEffect(() => {

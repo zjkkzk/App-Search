@@ -229,19 +229,30 @@ async function cleanupTempDir(id: string) {
 /** GitHub release 下载 URL 模式 */
 const GITHUB_DOWNLOAD_PATTERN = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//;
 const GITHUB_API_ASSET_PATTERN = /^https?:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\//;
+const GITHUB_OBJECTS_PATTERN = /^https?:\/\/objects\.githubusercontent\.com\//;
 
-/** 解析过的重定向 URL 缓存（内存中，避免重复 HEAD 请求） */
+/** 解析过的重定向 URL 缓存（内存中，避免重复请求） */
 const _redirectCache = new Map<string, string>();
 
 /**
  * 预解析 GitHub 下载 URL 的重定向目标。
- * GitHub release asset URL 返回 302 重定向到 CDN，
- * expo-file-system 的 createDownloadResumable 不跟随重定向导致下载空文件。
- * 此函数通过 fetch 跟随重定向链，返回最终的目标 URL。
+ *
+ * 根因：GitHub release asset URL 返回 302 → S3/CloudFront CDN。
+ * expo-file-system 的 createDownloadResumable 不跟随重定向，
+ * 导致下载的是 302 响应体（空文件），而非实际 APK 二进制。
+ *
+ * 修复：使用 fetch({ redirect: 'manual' }) 获取 Location 响应头，
+ * 递归跟随直到拿到最终 CDN URL。
+ * 注意：React Native 中 fetch 的 response.url 属性不可用（始终为 undefined），
+ * 所以必须手动解析 Location 头。
  */
 async function resolveRedirectUrl(url: string): Promise<string> {
-  // 非 GitHub URL 直接返回原 URL
-  if (!GITHUB_DOWNLOAD_PATTERN.test(url) && !GITHUB_API_ASSET_PATTERN.test(url)) {
+  // 非 GitHub 系列 URL 直接返回原 URL
+  if (
+    !GITHUB_DOWNLOAD_PATTERN.test(url) &&
+    !GITHUB_API_ASSET_PATTERN.test(url) &&
+    !GITHUB_OBJECTS_PATTERN.test(url)
+  ) {
     return url;
   }
 
@@ -250,18 +261,36 @@ async function resolveRedirectUrl(url: string): Promise<string> {
   if (cached) return cached;
 
   try {
-    const res = await fetch(url, {
-      method: 'HEAD',
-      redirect: 'follow',
-      // 不设 headers，让浏览器/原生层自动处理
-    });
-    const finalUrl = res.url || url;
-    // 缓存解析结果（同一 URL 的重定向目标在短时间内不变）
-    _redirectCache.set(url, finalUrl);
-    console.log(`[DownloadManager] 重定向解析: ${url.substring(0, 60)}... → ${finalUrl.substring(0, 60)}...`);
-    return finalUrl;
+    let currentUrl = url;
+    // 最多跟随 5 次重定向，防止死循环
+    for (let hop = 0; hop < 5; hop++) {
+      const res = await fetch(currentUrl, {
+        method: 'HEAD',
+        redirect: 'manual',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+
+      // 3xx 重定向 → 提取 Location 头
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('Location') || res.headers.get('location');
+        if (!location) break; // 没有 Location 头，停止跟随
+
+        // 处理相对路径重定向（极少情况）
+        currentUrl = location.startsWith('http')
+          ? location
+          : new URL(location, currentUrl).href;
+      } else {
+        // 2xx / 4xx / 5xx → 已到达最终目标
+        break;
+      }
+    }
+
+    _redirectCache.set(url, currentUrl);
+    if (currentUrl !== url) {
+      console.log(`[DownloadManager] 重定向: ${url.substring(0, 55)}... → ${currentUrl.substring(0, 55)}...`);
+    }
+    return currentUrl;
   } catch {
-    // 解析失败时回退到原 URL，让下载管理器自行处理
     console.warn('[DownloadManager] 重定向解析失败，使用原 URL');
     return url;
   }

@@ -348,6 +348,29 @@ export async function batchUpdateInstalledLatest(
   if (stmt?.finalizeAsync) await stmt.finalizeAsync().catch(() => {});
 }
 
+/** 按 owner/repo 更新已安装应用的版本号（用于外部安装后同步本地版本） */
+export async function updateInstalledVersionByRepo(
+  owner: string,
+  repo: string,
+  newVersion: string,
+): Promise<void> {
+  if (IS_WEB) {
+    const list = webGet<InstalledApp[]>('oas_installed', []);
+    const idx = list.findIndex((a) => a.owner === owner && a.repo === repo);
+    if (idx >= 0) {
+      list[idx].installed_version = newVersion;
+      list[idx].installed_at = new Date().toISOString();
+      webSet('oas_installed', list);
+    }
+    return;
+  }
+  const db = await initDb();
+  await db.runAsync(
+    'UPDATE installed_apps SET installed_version = ?, installed_at = ? WHERE owner = ? AND repo = ?',
+    [newVersion, new Date().toISOString(), owner, repo],
+  );
+}
+
 export async function ignoreInstalledUpdate(appId: number, version: string): Promise<void> {
   if (IS_WEB) {
     const list = webGet<InstalledApp[]>('oas_installed', []);
