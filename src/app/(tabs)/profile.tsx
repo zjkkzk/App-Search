@@ -151,11 +151,26 @@ export default function ProfileTab() {
       const releases = await fetchReleases('qq5855144', 'App-Search', 1, true);
       if (!releases.length) { setUpdateCheck('error'); return; }
       const release = releases[0];
+      // tag 可能是 "latest" 或语义版本，统一去除前缀 v
       const latest = release.tag_name.replace(/^v/i, '');
       const installable = filterInstallAssets(release.assets);
       setLatestVersion(latest);
       setUpdateAssets(installable.map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })));
-      setUpdateCheck(latest === appVersion ? 'latest' : 'update_available');
+
+      // 判断是否已是最新：
+      // 1. 若 tag 是语义版本（含 "."）则与 appVersion 对比
+      // 2. 若 tag 是 "latest" 等非语义版本，则检查下载任务里是否有相同文件名的已完成任务
+      let isLatest = false;
+      if (latest.includes('.')) {
+        isLatest = latest === appVersion;
+      } else {
+        const completedFilenames = getAllTasks()
+          .filter((t) => t.status === 'completed')
+          .map((t) => t.filename);
+        isLatest = installable.length > 0
+          && installable.every((a) => completedFilenames.includes(a.name));
+      }
+      setUpdateCheck(isLatest ? 'latest' : 'update_available');
     } catch {
       setUpdateCheck('error');
     }
