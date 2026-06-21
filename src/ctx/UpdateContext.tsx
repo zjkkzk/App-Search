@@ -10,6 +10,7 @@ import {
   getInstalledApps, updateInstalledLatest, type InstalledApp,
 } from '@/lib/database';
 import { fetchReleases } from '@/lib/github';
+import * as DM from '@/lib/downloadManager';
 
 interface UpdateContextValue {
   /** 有可用更新且未忽略的应用数量 */
@@ -95,6 +96,18 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     checkAll(true);
   }, []);
+
+  // 监听下载完成事件：有新版本安装后立即刷新角标
+  // （DownloadContext 与 UpdateContext 层级不同，无法直接调用，改用 DM 订阅）
+  useEffect(() => {
+    const unsub = DM.subscribe((task) => {
+      if (task.status === 'completed') {
+        // 稍等 200ms 确保 upsertInstalledApp 已写入 DB
+        setTimeout(() => { refresh(); }, 200);
+      }
+    });
+    return unsub;
+  }, [refresh]);
 
   return (
     <UpdateContext.Provider value={{ pendingCount, checking, refresh }}>
