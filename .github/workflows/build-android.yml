@@ -167,21 +167,23 @@ jobs:
           mv "${{ steps.apk.outputs.path }}" "$DEST"
           echo "name=openappstore.${VERSION}.apk" >> $GITHUB_OUTPUT
           echo "path=$DEST" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Publish latest Release (main push)
+      - name: Publish versioned Release (main push)
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="1.0.${{ github.run_number }}"
+          VERSION="${{ steps.rename_latest.outputs.version }}"
+          TAG="v${VERSION}"
           APK="${{ steps.rename_latest.outputs.path }}"
           COMMIT_MSG=$(git log -1 --pretty=%s)
 
-          # 原子操作：先删旧 Release + Tag，再创建新的
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          # 删除同名旧 Tag/Release（幂等）
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
 
-          gh release create latest "$APK" \
-            --title "Latest Stable — v${VERSION}" \
+          gh release create "$TAG" "$APK" \
+            --title "v${VERSION}" \
             --notes "$(cat <<'NOTES'
           ✅ **main 分支最新稳定构建**
 
@@ -193,7 +195,7 @@ jobs:
           | 提交信息 | '"$COMMIT_MSG"' |
           | 构建时间 | '"$(date -u +'%Y-%m-%d %H:%M UTC')"' |
 
-          > 此 Release 始终对应 main 分支最新成功构建，旧版 APK 请在 [Actions Artifacts](/${{ github.repository }}/actions) 中获取。
+          > APK 下载：\`openappstore.'"${VERSION}"'.apk\`
           NOTES
           )" \
             --target "${{ github.sha }}" \

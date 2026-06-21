@@ -1,13 +1,13 @@
 /**
- * 下载管理器 v6
+ * 下载管理器 v7
  *
  * 设计决策：
- * 1. redirect 预解析：GitHub release asset URL 返回 302，部分 Android 版本 expo-file-system
- *    跟随后得到 0B 文件；预先用 fetch HEAD 拿到最终 CDN URL 再传给 createDownloadResumable
- * 2. 单线程：移除分片并行（大文件 Base64 合并导致 OOM，且收益有限）
- * 3. 暂停续传：pauseAsync() 保存 resumeData，resume 时带 resumeData 重建 Resumable
- * 4. 进度回调：移除节流门，每次回调都 notify，由 Context 防抖 150ms 控制渲染频率
- * 5. SAF 保存：Android 完成后写入公共 Downloads（静态导入 expo-file-system/legacy）
+ * 1. redirect 预解析：GitHub release asset URL 返回 302，预先 HEAD 拿到最终 CDN URL
+ * 2. 弱网自动重试：网络错误/超时最多重试 3 次，指数退避（2s/4s/8s）
+ * 3. 卡顿检测：30s 无进度字节增量视为卡顿，自动取消并重试
+ * 4. 暂停续传：pauseAsync() 保存 resumeData，resume 时带 resumeData 重建 Resumable
+ * 5. 进度回调：每次回调都 notify，由 Context 防抖 150ms 控制渲染频率
+ * 6. SAF 保存：Android 完成后写入公共 Downloads（静态导入 expo-file-system/legacy）
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,6 +15,9 @@ import * as _FileSystem from 'expo-file-system/legacy';
 
 const IS_WEB = Platform.OS === 'web';
 const APP_FOLDER_NAME = '开源应用商店';
+const MAX_RETRIES = 3;           // 弱网最多重试次数
+const STALL_TIMEOUT_MS = 30_000; // 30s 无进度视为卡顿
+const RETRY_BASE_DELAY_MS = 2000; // 指数退避基础延迟
 
 /**
  * 解析重定向 URL：GitHub release asset 下载链接会 302 跳转到 CDN
@@ -30,6 +33,24 @@ async function resolveRedirectUrl(url: string): Promise<string> {
     // 解析失败则降级使用原始 URL
   }
   return url;
+}
+
+/** 等待指定毫秒（用于重试退避） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 判断是否为可重试的网络错误 */
+function isRetryableError(msg: string): boolean {
+  return (
+    msg.includes('Network request failed') ||
+    msg.includes('Unable to resolve host') ||
+    msg.includes('timeout') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ECONNABORTED') ||
+    msg.includes('socket hang up')
+  );
 }
 const SAF_URI_KEY = '@openappstore/saf_downloads_uri';
 const MAX_CONCURRENT = 3;
@@ -218,7 +239,7 @@ function flushQueue() {
 }
 
 // ─── 核心下载逻辑 ─────────────────────────────────────────────────────────────
-async function startTask(id: string) {
+async function startTask(id: string, retryCount = 0) {
   const task = tasks.get(id);
   if (!task) return;
 
@@ -243,8 +264,31 @@ async function startTask(id: string) {
 
   task.status = 'downloading';
   task.error = null;
-  speedSampler.set(id, { ts: Date.now(), bytes: 0 });
+  if (retryCount > 0) {
+    // 重试时保留已下载字节数，提示用户正在重试
+    task.error = null;
+  }
+  speedSampler.set(id, { ts: Date.now(), bytes: task.bytesWritten ?? 0 });
   notify(task);
+
+  // ── 卡顿检测：30s 无进度字节增量 → 取消当前下载并触发重试 ──────────────
+  let lastStallBytes = task.bytesWritten ?? 0;
+  let lastStallTs = Date.now();
+  let stallDetected = false;
+  const stallTimer = setInterval(() => {
+    const t = tasks.get(id);
+    if (!t || t.status !== 'downloading') { clearInterval(stallTimer); return; }
+    const now = Date.now();
+    if ((t.bytesWritten ?? 0) > lastStallBytes) {
+      lastStallBytes = t.bytesWritten ?? 0;
+      lastStallTs = now;
+    } else if (now - lastStallTs >= STALL_TIMEOUT_MS) {
+      clearInterval(stallTimer);
+      stallDetected = true;
+      const resumable = activeResumables.get(id);
+      if (resumable) resumable.cancelAsync().catch(() => {});
+    }
+  }, 5000);
 
   const progressCallback = (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
     const t = tasks.get(id);
@@ -291,11 +335,28 @@ async function startTask(id: string) {
 
   try {
     const result = await resumable.downloadAsync();
+    clearInterval(stallTimer);
     activeResumables.delete(id);
     speedSampler.delete(id);
 
     const t = tasks.get(id);
     if (!t) return;
+
+    // 卡顿取消后自动重试
+    if (stallDetected || (!result && t.status === 'downloading')) {
+      if (retryCount < MAX_RETRIES) {
+        t.error = `网络卡顿，正在重试（${retryCount + 1}/${MAX_RETRIES}）…`;
+        t.status = 'downloading';
+        notify(t);
+        await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, retryCount));
+        return startTask(id, retryCount + 1);
+      }
+      t.status = 'failed';
+      t.error = '网络持续不稳定，请稍后手动重试';
+      notify(t);
+      flushQueue();
+      return;
+    }
 
     // 暂停/取消时 downloadAsync 返回 undefined
     if (!result) {
@@ -333,14 +394,26 @@ async function startTask(id: string) {
     notify(t);
     flushQueue();
   } catch (e: any) {
+    clearInterval(stallTimer);
     activeResumables.delete(id);
     speedSampler.delete(id);
 
     const t = tasks.get(id);
     if (!t || t.status === 'paused' || t.status === 'cancelled') { flushQueue(); return; }
 
-    t.status = 'failed';
     const msg: string = e?.message ?? '';
+
+    // 网络错误自动重试（指数退避）
+    if (isRetryableError(msg) && retryCount < MAX_RETRIES) {
+      const delay = RETRY_BASE_DELAY_MS * Math.pow(2, retryCount);
+      t.error = `网络异常，${delay / 1000}s 后重试（${retryCount + 1}/${MAX_RETRIES}）…`;
+      t.status = 'downloading';
+      notify(t);
+      await sleep(delay);
+      return startTask(id, retryCount + 1);
+    }
+
+    t.status = 'failed';
     if (msg.includes('Network request failed') || msg.includes('Unable to resolve host'))
       t.error = '网络连接失败，请检查网络后重试';
     else if (msg.includes('No space left') || msg.includes('ENOSPC'))
@@ -349,8 +422,8 @@ async function startTask(id: string) {
       t.error = '下载链接已失效（403），请重新获取';
     else if (msg.includes('404') || msg.includes('Not Found'))
       t.error = '文件不存在（404），该版本可能已删除';
-    else if (msg.includes('timeout') || msg.includes('ETIMEDOUT'))
-      t.error = '下载超时，请检查网络后重试';
+    else if (isRetryableError(msg))
+      t.error = `网络持续不稳定，已重试 ${MAX_RETRIES} 次，请检查网络后手动重试`;
     else
       t.error = msg || '下载失败，请重试';
 

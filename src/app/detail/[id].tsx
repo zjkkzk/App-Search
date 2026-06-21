@@ -423,7 +423,7 @@ export default function DetailScreen() {
                       {relIdx === 0 ? '最新版本' : '历史版本'}{' '}
                       {rel.tag_name === 'latest'
                         ? `${rel.published_at?.slice(0, 10).replace(/-/g, '/') ?? 'latest'} 构建`
-                        : rel.tag_name}
+                        : rel.tag_name.replace(/^v/i, '')}
                     </Text>
                     <Text style={{ fontSize: 12, color: '#AAA' }}>{rel.published_at?.slice(0, 10).replace(/-/g, '/')}</Text>
                     <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#AAA" />
@@ -538,7 +538,7 @@ export default function DetailScreen() {
             { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本',
               value: releases[0]?.tag_name === 'latest'
                 ? `${releases[0]?.published_at?.slice(0, 10).replace(/-/g, '/') ?? '-'} 构建`
-                : (releases[0]?.tag_name || '-') },
+                : (releases[0]?.tag_name?.replace(/^v/i, '') || '-') },
             { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间', value: releases[0]?.published_at ? releases[0].published_at.slice(0, 10).replace(/-/g, '/') : '-' },
           ].map((row) => (
             <View key={row.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
