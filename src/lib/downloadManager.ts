@@ -580,15 +580,19 @@ export function clearFinished(): void {
   subscribers.forEach((cb) => cb({ id: '__refresh__' } as any));
 }
 
-export function pauseAll(): void {
+export async function pauseAll(): Promise<void> {
+  const pausePromises: Promise<void>[] = [];
   for (const [id, task] of tasks) {
     if (task.status === 'downloading' || task.status === 'pending') {
       if (task.status === 'downloading') {
         const resumable = activeResumables.get(id);
         if (resumable) {
-          resumable.pauseAsync().then((s) => {
-            task.resumeData = s?.resumeData ?? undefined;
-          }).catch(() => null);
+          // 等待 pauseAsync 完成，确保 resumeData 写入后再持久化
+          pausePromises.push(
+            resumable.pauseAsync().then((s) => {
+              task.resumeData = s?.resumeData ?? undefined;
+            }).catch(() => undefined),
+          );
           activeResumables.delete(id);
         }
         speedSampler.delete(id);
@@ -599,6 +603,9 @@ export function pauseAll(): void {
       notify(task);
     }
   }
+  // 等待所有 resumeData 就绪后再落盘，防止 App 被杀时 resumeData 丢失
+  await Promise.allSettled(pausePromises);
+  persistPausedTasks();
 }
 
 export function resumeAll(): void {

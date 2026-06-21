@@ -2,9 +2,14 @@
  * 全局下载状态 Context
  * 订阅 downloadManager 的所有任务变更，统一向组件树分发
  * 集成通知系统：下载进度/完成/失败通知
+ *
+ * 后台下载保护逻辑：
+ * - App 切后台时：立即 pauseAll（保存 resumeData）并持久化到 AsyncStorage
+ * - App 回前台时：自动续传所有因切后台被暂停的任务
+ * - App 被杀后重启：restorePersistedTasks() 恢复为 paused 状态，用户点"全部恢复"或手动续传
  */
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as DM from '@/lib/downloadManager';
 import {
   showSystemProgress, showSystemComplete, showSystemFailed,
@@ -39,6 +44,8 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
   const [safGranted, setSafGranted] = useState(false);
   const pendingRef = useRef(false);
   const lastNotifState = useRef<Map<string, { status: string; progress: number }>>(new Map());
+  // 记录因切后台被自动暂停的任务 ID，回前台时自动续传
+  const bgPausedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const unsubscribe = DM.subscribe((task) => {
@@ -95,6 +102,37 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
       DM.hasDownloadsPermission().then((has) => setSafGranted(has));
     }
     return unsubscribe;
+  }, []);
+
+  // ── 后台保护：切后台自动暂停并持久化；回前台自动续传 ────────────────────
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const handleAppStateChange = (nextState: string) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        // 收集当前正在下载的任务 ID，标记为"后台自动暂停"
+        const downloading = DM.getAllTasks().filter(
+          (t) => t.status === 'downloading' || t.status === 'pending',
+        );
+        if (downloading.length === 0) return;
+        downloading.forEach((t) => bgPausedIds.current.add(t.id));
+        // pauseAll 已改为 async，等待 resumeData 就绪后自动 persistPausedTasks
+        DM.pauseAll().then(() => {
+          setTasks(DM.getAllTasks());
+        }).catch(() => {});
+      } else if (nextState === 'active') {
+        // 回前台：自动续传所有因切后台被暂停的任务
+        const toResume = [...bgPausedIds.current];
+        bgPausedIds.current.clear();
+        if (toResume.length === 0) return;
+        Promise.all(toResume.map((id) => DM.resume(id))).catch(() => {}).finally(() => {
+          setTasks(DM.getAllTasks());
+        });
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    return () => sub.remove();
   }, []);
 
   const refreshSafStatus = async () => {
@@ -155,8 +193,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
       setTasks([]);
     },
     pauseAll: () => {
-      DM.pauseAll();
-      setTasks(DM.getAllTasks());
+      DM.pauseAll().finally(() => setTasks(DM.getAllTasks()));
     },
     resumeAll: () => {
       DM.resumeAll();
