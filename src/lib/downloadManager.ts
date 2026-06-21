@@ -1,14 +1,12 @@
 /**
- * 下载管理器 v7 — 重定向预解析 + 健壮性增强
+ * 下载管理器 v8 — fetch 下载 GitHub 重定向 URL
  *
  * 设计决策：
- * 1. GitHub 重定向预解析：GitHub release asset URL 返回 302，先 HEAD 拿到最终 CDN URL
- * 2. 单线程：移除分片并行（大文件 Base64 合并导致 OOM，且收益有限）
- * 3. 暂停续传：pauseAsync() 保存 resumeData，resume 时带 resumeData 重建 Resumable
- * 4. 进度回调：移除节流门，每次回调都 notify，由 Context 防抖 150ms 控制渲染频率
- * 5. SAF 保存：Android 完成后写入公共 Downloads（静态导入 expo-file-system/legacy）
- * 6. 大文件保护：SAF 移动前检查文件大小，超过 50MB 跳过 Base64 转换避免 OOM
- * 7. 自动重试：临时网络错误自动重试 1 次
+ * 1. GitHub URL：fetch 下载（原生 HTTP 栈自动跟随 302→CDN），expo-file-system 写入磁盘
+ * 2. 非 GitHub URL：沿用 createDownloadResumable（支持断点续传）
+ * 3. 大文件保护：fetch 下载超过 50MB 时拒绝，走 createDownloadResumable 兜底
+ * 4. SAF 保存：Android 完成后写入公共 Downloads
+ * 5. 自动重试：临时网络错误自动重试 1 次
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -224,76 +222,117 @@ async function cleanupTempDir(id: string) {
   await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
 }
 
-// ─── GitHub 重定向预解析 ────────────────────────────────────────────────────────
+// ─── GitHub fetch 下载（处理 302 重定向）────────────────────────────────
 
 /** GitHub release 下载 URL 模式 */
-const GITHUB_DOWNLOAD_PATTERN = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//;
-const GITHUB_API_ASSET_PATTERN = /^https?:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\//;
-const GITHUB_OBJECTS_PATTERN = /^https?:\/\/objects\.githubusercontent\.com\//;
+const GITHUB_URL_PATTERN = /^https?:\/\/(github\.com|api\.github\.com|objects\.githubusercontent\.com)\//;
 
-/** 解析过的重定向 URL 缓存（内存中，避免重复请求） */
-const _redirectCache = new Map<string, string>();
+/** fetch 下载最大文件大小（超过则走 createDownloadResumable 兜底） */
+const FETCH_MAX_SIZE = 50 * 1024 * 1024; // 50MB
 
 /**
- * 预解析 GitHub 下载 URL 的重定向目标。
- *
- * 根因：GitHub release asset URL 返回 302 → S3/CloudFront CDN。
- * expo-file-system 的 createDownloadResumable 不跟随重定向，
- * 导致下载的是 302 响应体（空文件），而非实际 APK 二进制。
- *
- * 修复：使用 fetch({ redirect: 'manual' }) 获取 Location 响应头，
- * 递归跟随直到拿到最终 CDN URL。
- * 注意：React Native 中 fetch 的 response.url 属性不可用（始终为 undefined），
- * 所以必须手动解析 Location 头。
+ * 使用 fetch 下载文件并写入磁盘。
+ * React Native 的 OkHttp 底层自动跟随 302 重定向，无需手动解析。
+ * 适用于 GitHub release asset URL 等需要重定向的链接。
  */
-async function resolveRedirectUrl(url: string): Promise<string> {
-  // 非 GitHub 系列 URL 直接返回原 URL
-  if (
-    !GITHUB_DOWNLOAD_PATTERN.test(url) &&
-    !GITHUB_API_ASSET_PATTERN.test(url) &&
-    !GITHUB_OBJECTS_PATTERN.test(url)
-  ) {
-    return url;
+async function fetchDownload(
+  url: string,
+  localUri: string,
+  taskId: string,
+  _expectedSize: number,
+): Promise<{ uri: string; size: number }> {
+  const fs = getFS();
+  if (!fs) throw new Error('文件系统不可用');
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { 'Cache-Control': 'no-cache' },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('文件不存在（404）');
+    if (response.status === 403) throw new Error('下载链接已失效（403）');
+    throw new Error(`HTTP ${response.status}`);
   }
 
-  // 检查缓存
-  const cached = _redirectCache.get(url);
-  if (cached) return cached;
-
-  try {
-    let currentUrl = url;
-    // 最多跟随 5 次重定向，防止死循环
-    for (let hop = 0; hop < 5; hop++) {
-      const res = await fetch(currentUrl, {
-        method: 'HEAD',
-        redirect: 'manual',
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-
-      // 3xx 重定向 → 提取 Location 头
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('Location') || res.headers.get('location');
-        if (!location) break; // 没有 Location 头，停止跟随
-
-        // 处理相对路径重定向（极少情况）
-        currentUrl = location.startsWith('http')
-          ? location
-          : new URL(location, currentUrl).href;
-      } else {
-        // 2xx / 4xx / 5xx → 已到达最终目标
-        break;
-      }
-    }
-
-    _redirectCache.set(url, currentUrl);
-    if (currentUrl !== url) {
-      console.log(`[DownloadManager] 重定向: ${url.substring(0, 55)}... → ${currentUrl.substring(0, 55)}...`);
-    }
-    return currentUrl;
-  } catch {
-    console.warn('[DownloadManager] 重定向解析失败，使用原 URL');
-    return url;
+  // 检查 Content-Length，超过限制则拒绝
+  const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
+  if (contentLength > FETCH_MAX_SIZE) {
+    throw new Error('FILE_TOO_LARGE'); // 特殊标记，由调用方处理
   }
+
+  // 读取二进制数据
+  const arrayBuffer = await response.arrayBuffer();
+  const uint8 = new Uint8Array(arrayBuffer);
+
+  if (uint8.byteLength === 0) {
+    throw new Error('下载内容为空');
+  }
+
+  // 检查是否下载了 HTML 错误页面（GitHub 返回 200 但内容是 HTML）
+  // APK 文件以 0x50 0x4B (ZIP) 或 0x04 0x00 (DEX) 开头
+  if (uint8.byteLength < 1024) {
+    // 太小的文件，检查是否是 HTML
+    const header = new TextDecoder().decode(uint8.slice(0, Math.min(512, uint8.byteLength)));
+    if (header.trimStart().startsWith('<!') || header.trimStart().startsWith('<html')) {
+      throw new Error('服务器返回了网页而非文件，请重试');
+    }
+  }
+
+  // 写入磁盘
+  const base64 = uint8ToBase64(uint8);
+  await fs.writeAsStringAsync(localUri, base64, {
+    encoding: fs.EncodingType.Base64,
+  });
+
+  // 进度更新（fetch 无中间进度，完成后一次性更新）
+  const t = tasks.get(taskId);
+  if (t) {
+    t.bytesWritten = uint8.byteLength;
+    t.totalBytes = contentLength > 0 ? contentLength : uint8.byteLength;
+    t.progress = 1;
+    t.speed = 0;
+    t.eta = 0;
+    notify(t);
+  }
+
+  return { uri: localUri, size: uint8.byteLength };
+}
+
+/** Uint8Array → Base64 字符串（免 atob 依赖） */
+function uint8ToBase64(bytes: Uint8Array): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let result = '';
+  const len = bytes.length;
+  for (let i = 0; i < len; i += 3) {
+    const b1 = bytes[i];
+    const b2 = i + 1 < len ? bytes[i + 1] : 0;
+    const b3 = i + 2 < len ? bytes[i + 2] : 0;
+    result += chars[b1 >> 2];
+    result += chars[((b1 & 3) << 4) | (b2 >> 4)];
+    result += i + 1 < len ? chars[((b2 & 15) << 2) | (b3 >> 6)] : '=';
+    result += i + 2 < len ? chars[b3 & 63] : '=';
+  }
+  return result;
+}
+
+function mapErrorMessage(msg: string): string {
+  if (!msg) return '下载失败，请重试';
+  if (msg.includes('Network request failed') || msg.includes('Unable to resolve host'))
+    return '网络连接失败，请检查网络后重试';
+  if (msg.includes('No space left') || msg.includes('ENOSPC'))
+    return '存储空间不足，请清理后重试';
+  if (msg.includes('403') || msg.includes('Forbidden'))
+    return '下载链接已失效（403），请重新获取';
+  if (msg.includes('404') || msg.includes('Not Found'))
+    return '文件不存在（404），该版本可能已删除';
+  if (msg.includes('timeout') || msg.includes('ETIMEDOUT'))
+    return '下载超时，请检查网络后重试';
+  if (msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED'))
+    return '连接被重置，请检查网络后重试';
+  if (msg.includes('ENOTFOUND') || msg.includes('DNS'))
+    return 'DNS 解析失败，请检查网络连接';
+  return msg;
 }
 
 // ─── 核心下载逻辑 ─────────────────────────────────────────────────────────────
@@ -325,11 +364,7 @@ async function startTask(id: string) {
   speedSampler.set(id, { ts: Date.now(), bytes: 0 });
   notify(task);
 
-  // 预解析 GitHub 重定向 URL，避免 expo-file-system 下载空文件
-  const downloadUrl = await resolveRedirectUrl(task.url);
-  if (downloadUrl !== task.url) {
-    task.url = downloadUrl; // 更新为解析后的 URL
-  }
+  const isGitHubUrl = GITHUB_URL_PATTERN.test(task.url);
 
   const progressCallback = (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
     const t = tasks.get(id);
@@ -366,9 +401,90 @@ async function startTask(id: string) {
     notify(t);
   };
 
-  // 使用 resumeData（暂停后恢复）或直接下载
+  if (isGitHubUrl) {
+    // GitHub URL：使用 fetch 下载（原生 HTTP 栈跟随 302 重定向）
+    try {
+      const { uri, size } = await fetchDownload(task.url, localUri, id, task.totalBytes);
+      activeResumables.delete(id);
+      speedSampler.delete(id);
+
+      const t = tasks.get(id);
+      if (!t) return;
+
+      // 校验文件
+      const validErr = await validateFile(uri, size);
+      if (validErr) {
+        t.status = 'failed'; t.error = validErr; notify(t);
+        await cleanupTempDir(id);
+        flushQueue(); return;
+      }
+
+      t.status = 'completed';
+      t.progress = 1;
+      t.speed = 0;
+      t.eta = 0;
+      t.bytesWritten = size;
+      t.totalBytes = size;
+      t.resumeData = undefined;
+
+      if (Platform.OS === 'android') {
+        const { uri: safUri, safFailed } = await moveToSafDownloads(uri, t.filename, size);
+        t.localUri = safUri;
+        if (safFailed) {
+          t.error = '文件保存在应用缓存目录（未授权公共存储权限）';
+        }
+        await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
+      } else {
+        t.localUri = uri;
+      }
+
+      notify(t);
+      flushQueue();
+    } catch (e: any) {
+      activeResumables.delete(id);
+      speedSampler.delete(id);
+
+      const t = tasks.get(id);
+      if (!t) { flushQueue(); return; }
+
+      const msg: string = e?.message ?? '';
+
+      // FILE_TOO_LARGE → 回退到 createDownloadResumable（不保证成功但值得尝试）
+      if (msg === 'FILE_TOO_LARGE') {
+        t.status = 'failed';
+        t.error = '文件过大，请尝试使用浏览器下载';
+        notify(t);
+        await cleanupTempDir(id);
+        flushQueue();
+        return;
+      }
+
+      // 自动重试
+      if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
+        t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
+        t.status = 'pending';
+        t.error = `网络波动，自动重试中 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+        t.progress = 0;
+        t.speed = 0;
+        t.eta = -1;
+        notify(t);
+        await cleanupTempDir(id);
+        flushQueue();
+        return;
+      }
+
+      t.status = 'failed';
+      t.error = mapErrorMessage(msg);
+      notify(t);
+      await cleanupTempDir(id);
+      flushQueue();
+    }
+    return;
+  }
+
+  // 非 GitHub URL：使用 createDownloadResumable
   const resumable = fs.createDownloadResumable(
-    downloadUrl,
+    task.url,
     localUri,
     {},
     progressCallback,
@@ -449,23 +565,7 @@ async function startTask(id: string) {
     }
 
     t.status = 'failed';
-    if (msg.includes('Network request failed') || msg.includes('Unable to resolve host'))
-      t.error = '网络连接失败，请检查网络后重试';
-    else if (msg.includes('No space left') || msg.includes('ENOSPC'))
-      t.error = '存储空间不足，请清理后重试';
-    else if (msg.includes('403') || msg.includes('Forbidden'))
-      t.error = '下载链接已失效（403），请重新获取';
-    else if (msg.includes('404') || msg.includes('Not Found'))
-      t.error = '文件不存在（404），该版本可能已删除';
-    else if (msg.includes('timeout') || msg.includes('ETIMEDOUT'))
-      t.error = '下载超时，请检查网络后重试';
-    else if (msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED'))
-      t.error = '连接被重置，请检查网络后重试';
-    else if (msg.includes('ENOTFOUND') || msg.includes('DNS'))
-      t.error = 'DNS 解析失败，请检查网络连接';
-    else
-      t.error = msg || '下载失败，请重试';
-
+    t.error = mapErrorMessage(msg);
     notify(t);
     await cleanupTempDir(id);
     flushQueue();
