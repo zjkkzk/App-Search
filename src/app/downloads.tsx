@@ -216,21 +216,29 @@ export default function DownloadsScreen() {
             </Text>
             <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={1}>{item.filename}</Text>
             {item.status === 'downloading' && (
-              <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                {pct != null
-                  ? <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>{pct}%</Text>
-                  : <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>下载中…</Text>
-                }
-                {spd ? <Text style={{ fontSize: 11, color: '#999' }}>{spd}</Text> : null}
-                {item.totalBytes > 0 && (
-                  <Text style={{ fontSize: 11, color: '#BBB' }}>
-                    {formatBytes(item.bytesWritten)}/{formatBytes(item.totalBytes)}
-                  </Text>
-                )}
-                {item.eta > 0 && (
-                  <Text style={{ fontSize: 11, color: '#BBB' }}>
-                    剩余 {item.eta < 60 ? `${item.eta}s` : `${Math.round(item.eta / 60)}min`}
-                  </Text>
+              <View style={{ gap: 2 }}>
+                {/* 第一行：百分比 + 速率（固定同行，不换行） */}
+                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                  {pct != null
+                    ? <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>{pct}%</Text>
+                    : <Text style={{ fontSize: 12, color: BLUE, fontWeight: '600' }}>下载中…</Text>
+                  }
+                  {spd ? <Text style={{ fontSize: 11, color: '#999' }}>{spd}</Text> : null}
+                </View>
+                {/* 第二行：已下载/总大小 + 剩余时间（固定同行） */}
+                {(item.totalBytes > 0 || item.eta > 0) && (
+                  <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                    {item.totalBytes > 0 && (
+                      <Text style={{ fontSize: 11, color: '#BBB' }}>
+                        {formatBytes(item.bytesWritten)}/{formatBytes(item.totalBytes)}
+                      </Text>
+                    )}
+                    {item.eta > 0 && (
+                      <Text style={{ fontSize: 11, color: '#BBB' }}>
+                        剩余 {item.eta < 60 ? `${item.eta}s` : `${Math.round(item.eta / 60)}min`}
+                      </Text>
+                    )}
+                  </View>
                 )}
               </View>
             )}
@@ -261,11 +269,6 @@ export default function DownloadsScreen() {
             )}
           </View>
         </View>
-        {item.status === 'downloading' && item.totalBytes > 0 && pct != null && (
-          <View style={{ height: 3, backgroundColor: '#F0F0F0', borderRadius: 2, marginTop: 10 }}>
-            <View style={{ width: `${pct}%` as any, height: '100%', backgroundColor: BLUE, borderRadius: 2 }} />
-          </View>
-        )}
       </View>
     );
   };
