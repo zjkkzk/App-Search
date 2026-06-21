@@ -44,8 +44,6 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
   const [safGranted, setSafGranted] = useState(false);
   const pendingRef = useRef(false);
   const lastNotifState = useRef<Map<string, { status: string; progress: number }>>(new Map());
-  // 记录因切后台被自动暂停的任务 ID，回前台时自动续传
-  const bgPausedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const unsubscribe = DM.subscribe((task) => {
@@ -104,31 +102,17 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe;
   }, []);
 
-  // ── 后台保护：切后台自动暂停并持久化；回前台自动续传 ────────────────────
+  // ── 后台保护：切后台仅持久化进度，不暂停下载；App 被杀重启时恢复断点 ──
   useEffect(() => {
     if (Platform.OS === 'web') return;
 
     const handleAppStateChange = (nextState: string) => {
       if (nextState === 'background' || nextState === 'inactive') {
-        // 收集当前正在下载的任务 ID，标记为"后台自动暂停"
-        const downloading = DM.getAllTasks().filter(
-          (t) => t.status === 'downloading' || t.status === 'pending',
-        );
-        if (downloading.length === 0) return;
-        downloading.forEach((t) => bgPausedIds.current.add(t.id));
-        // pauseAll 已改为 async，等待 resumeData 就绪后自动 persistPausedTasks
-        DM.pauseAll().then(() => {
-          setTasks(DM.getAllTasks());
-        }).catch(() => {});
-      } else if (nextState === 'active') {
-        // 回前台：自动续传所有因切后台被暂停的任务
-        const toResume = [...bgPausedIds.current];
-        bgPausedIds.current.clear();
-        if (toResume.length === 0) return;
-        Promise.all(toResume.map((id) => DM.resume(id))).catch(() => {}).finally(() => {
-          setTasks(DM.getAllTasks());
-        });
+        // 切后台：只持久化当前任务状态（崩溃/被杀恢复用），不暂停下载
+        // 下载通知已设置 ongoing+sticky，Android 会维持前台服务优先级使下载继续
+        DM.persistCurrentTasks();
       }
+      // 回前台：无需特殊处理，下载一直在进行
     };
 
     const sub = AppState.addEventListener('change', handleAppStateChange);

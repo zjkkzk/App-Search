@@ -214,6 +214,15 @@ function persistPausedTasks() {
   AsyncStorage.setItem(TASKS_PERSIST_KEY, JSON.stringify(toSave)).catch(() => {});
 }
 
+/** 切后台时调用：持久化所有活跃任务快照（含正在下载），用于 App 被杀后恢复断点 */
+export function persistCurrentTasks(): void {
+  if (IS_WEB) return;
+  const toSave = [...tasks.values()].filter(
+    (t) => ['paused', 'pending', 'downloading'].includes(t.status),
+  );
+  AsyncStorage.setItem(TASKS_PERSIST_KEY, JSON.stringify(toSave)).catch(() => {});
+}
+
 /** App 启动时从 AsyncStorage 恢复断点任务（作为 paused 状态，用户手动 resume） */
 export async function restorePersistedTasks(): Promise<void> {
   if (IS_WEB) return;

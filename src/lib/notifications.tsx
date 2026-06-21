@@ -37,10 +37,14 @@ async function ensureSystemNotif(): Promise<boolean> {
     if (Platform.OS === 'android') {
       await _Notifications.setNotificationChannelAsync(CHANNEL_ID, {
         name: '下载管理',
-        importance: _Notifications.AndroidImportance?.DEFAULT ?? 3,
-        vibrationPattern: [0, 100],
+        importance: _Notifications.AndroidImportance?.HIGH ?? 4,
+        vibrationPattern: [0],
+        enableVibrate: false,
         lightColor: '#1677FF',
         sound: null,
+        // HIGH importance + ongoing 是 Android 前台服务通知的标准配置
+        // 系统将保持进程存活直到通知被取消
+        showBadge: false,
       });
     }
     _notifReady = true;
@@ -68,10 +72,16 @@ export async function showSystemProgress(task: {
         title: `正在下载 ${task.appName}`,
         body: `${pct}%${speedStr}${task.multiThreaded ? ' · 多线程' : ''}`,
         data: { taskId: task.id, type: 'download_progress' },
-        ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
+        ...(Platform.OS === 'android' ? {
+          channelId: CHANNEL_ID,
+          // ongoing=true + sticky=true 触发 Android 前台服务行为
+          // 系统不会在滑动时消除通知，且进程优先级提升为 FOREGROUND
+          ongoing: true,
+          sticky: true,
+          color: '#1677FF',
+        } : {}),
         autoDismiss: false,
-        sticky: false,
-        priority: 'default' as any,
+        priority: 'high' as any,
       },
       trigger: null,
     });
