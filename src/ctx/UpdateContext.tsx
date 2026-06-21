@@ -173,9 +173,32 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refresh]);
 
-  // App 启动时强制全量检查
+  // 启动时：先同步本体版本号，再全量检查所有已安装应用
+  // 关键：必须确保 installed_version 已更新后再调用 checkAll，
+  // 否则 checkAll 执行时 installed_version 可能为旧值，导致误报"有更新"
   useEffect(() => {
-    checkAll(true);
+    let cancelled = false;
+    (async () => {
+      // 步骤 1：同步本体版本号（外部安装新版本后确保 installed_version 正确）
+      const selfOwner = 'qq5855144';
+      const selfRepo = 'App-Search';
+      const currentVersion = Constants.nativeApplicationVersion
+        ?? Constants.expoConfig?.version
+        ?? '1.0.0';
+      await updateInstalledVersionByRepo(selfOwner, selfRepo, currentVersion).catch(() => {});
+      if (cancelled) return;
+
+      // 步骤 2：全量检查所有已安装应用的更新
+      await checkAll(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
+    };
   }, []);
 
   // App 切回前台时增量检查
@@ -195,7 +218,6 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       if (task.status === 'completed' && task.appId > 0) {
         (async () => {
           try {
-            // 记录为已安装
             await upsertInstalledApp({
               app_id: task.appId,
               app_name: task.appName,
@@ -205,7 +227,6 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
               installed_version: task.version,
               installed_at: new Date().toISOString(),
             });
-            // 检查最新版本
             const latest = await fetchLatestReleaseTag(task.owner, task.repo, true);
             if (latest) {
               await updateInstalledLatest(task.appId, latest);
@@ -217,26 +238,6 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     });
     return unsub;
   }, [refresh]);
-
-  // 启动时同步本体版本号：外部安装新版本后，更新本地 installed_version
-  // 避免 installed_apps 表中记录旧版本导致的误报更新通知
-  useEffect(() => {
-    const selfOwner = 'qq5855144';
-    const selfRepo = 'App-Search';
-    const currentVersion = Constants.nativeApplicationVersion
-      ?? Constants.expoConfig?.version
-      ?? '1.0.0';
-    updateInstalledVersionByRepo(selfOwner, selfRepo, currentVersion)
-      .then(() => refresh())
-      .catch(() => {});
-  }, []);
-
-  // 清理定时器
-  useEffect(() => {
-    return () => {
-      if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
-    };
-  }, []);
 
   return (
     <UpdateContext.Provider value={{ pendingCount, checking, checkAll, refresh, checkSingle }}>

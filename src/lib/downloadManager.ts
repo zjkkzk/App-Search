@@ -299,21 +299,16 @@ async function fetchDownload(
   return { uri: localUri, size: uint8.byteLength };
 }
 
-/** Uint8Array → Base64 字符串（免 atob 依赖） */
+/** Uint8Array → Base64 字符串（分块 btoa，避免 Hermes 大循环字符串拼接 OOM） */
 function uint8ToBase64(bytes: Uint8Array): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let result = '';
-  const len = bytes.length;
-  for (let i = 0; i < len; i += 3) {
-    const b1 = bytes[i];
-    const b2 = i + 1 < len ? bytes[i + 1] : 0;
-    const b3 = i + 2 < len ? bytes[i + 2] : 0;
-    result += chars[b1 >> 2];
-    result += chars[((b1 & 3) << 4) | (b2 >> 4)];
-    result += i + 1 < len ? chars[((b2 & 15) << 2) | (b3 >> 6)] : '=';
-    result += i + 2 < len ? chars[b3 & 63] : '=';
+  // 使用原生 btoa（Hermes 内置），分块避免 apply 栈溢出
+  let binary = '';
+  const CHUNK = 0x8000; // 32KB 分块
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, i + CHUNK);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
   }
-  return result;
+  return btoa(binary);
 }
 
 function mapErrorMessage(msg: string): string {

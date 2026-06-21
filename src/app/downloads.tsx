@@ -18,6 +18,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { useDownload } from '@/ctx/DownloadContext';
 import { useUpdate } from '@/ctx/UpdateContext';
 import { formatSpeed, formatBytes, isInstallerFile } from '@/lib/downloadManager';
+import { normalizeVersion } from '@/lib/github';
 import {
   getInstalledApps, ignoreInstalledUpdate, removeInstalledApp,
   type InstalledApp,
@@ -344,8 +345,8 @@ export default function DownloadsScreen() {
   // ── 渲染：已安装应用行 ────────────────────────────────────
   const renderInstalledItem = ({ item }: { item: InstalledApp }) => {
     const hasUpdate = item.latest_version
-      && item.latest_version !== item.installed_version
-      && item.latest_version !== item.ignored_version;
+      && normalizeVersion(item.latest_version) !== normalizeVersion(item.installed_version)
+      && normalizeVersion(item.latest_version) !== normalizeVersion(item.ignored_version ?? '');
 
     return (
       <Pressable
