@@ -11,7 +11,7 @@ import {
   getDownloadHistory,
   clearDownloadHistory,
 } from '@/lib/database';
-import { fetchReleases, fetchRateLimit } from '@/lib/github';
+import { fetchReleases, fetchRateLimit, filterInstallAssets } from '@/lib/github';
 import { clearAllCache } from '@/lib/cache';
 import { getEventCounts } from '@/lib/events';
 import { useDownload } from '@/ctx/DownloadContext';
@@ -129,7 +129,7 @@ export default function ProfileTab() {
   useAndroidExitBack();
 
   const router = useRouter();
-  const { activeCount } = useDownload();
+  const { activeCount, enqueue } = useDownload();
   const { enabled: translateEnabled, targetLang, setEnabled: setTranslateEnabled, setTargetLang } = useTranslation();
 
   const [token, setTokenState] = useState('');
@@ -138,23 +138,41 @@ export default function ProfileTab() {
   const [dataExpanded, setDataExpanded] = useState(false);
   const [aboutExpanded, setAboutExpanded] = useState(false);
   const appVersion = Constants.expoConfig?.version ?? '1.0.0';
-  // 检测更新状态：idle | checking | latest | update_available | error
   type UpdateCheckState = 'idle' | 'checking' | 'latest' | 'update_available' | 'error';
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckState>('idle');
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [updateAssets, setUpdateAssets] = useState<{ name: string; url: string; size: number }[]>([]);
 
   const checkAppUpdate = async () => {
     setUpdateCheck('checking');
     setLatestVersion(null);
+    setUpdateAssets([]);
     try {
       const releases = await fetchReleases('qq5855144', 'App-Search', 1, true);
       if (!releases.length) { setUpdateCheck('error'); return; }
-      const latest = releases[0].tag_name.replace(/^v/i, '');
+      const release = releases[0];
+      const latest = release.tag_name.replace(/^v/i, '');
+      const installable = filterInstallAssets(release.assets);
       setLatestVersion(latest);
+      setUpdateAssets(installable.map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })));
       setUpdateCheck(latest === appVersion ? 'latest' : 'update_available');
     } catch {
       setUpdateCheck('error');
     }
+  };
+
+  const downloadUpdate = async (asset: { name: string; url: string; size: number }) => {
+    await enqueue({
+      url: asset.url,
+      filename: asset.name,
+      appId: 0,
+      appName: `开源应用商店 v${latestVersion ?? ''}`,
+      owner: 'qq5855144',
+      repo: 'App-Search',
+      avatarUrl: '',
+      version: latestVersion ?? '',
+    });
+    router.push('/downloads' as any);
   };
   const tokenInputRef = useRef<TextInput>(null);
   const [saving, setSaving] = useState(false);
@@ -571,14 +589,31 @@ export default function ProfileTab() {
                     <Text style={{ fontSize: 13, color: '#52C41A', fontWeight: '500' }}>已是最新版本</Text>
                   )}
                   {updateCheck === 'update_available' && (
-                    <Pressable onPress={() => Linking.openURL('https://github.com/qq5855144/App-Search/releases/latest')}
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 4,
-                        backgroundColor: '#FFF7E6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
-                      <Text style={{ fontSize: 13, color: '#FA8C16', fontWeight: '600' }}>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <Text style={{ fontSize: 12, color: '#FA8C16', fontWeight: '600' }}>
                         发现新版 v{latestVersion}
                       </Text>
-                      <Ionicons name="open-outline" size={12} color="#FA8C16" />
-                    </Pressable>
+                      {updateAssets.length > 0 ? (
+                        updateAssets.map((a) => (
+                          <Pressable key={a.url} onPress={() => downloadUpdate(a)}
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 4,
+                              backgroundColor: '#FA8C16', borderRadius: 8,
+                              paddingHorizontal: 10, paddingVertical: 4 }}>
+                            <Ionicons name="arrow-down-circle-outline" size={14} color="#fff" />
+                            <Text style={{ fontSize: 12, color: '#fff', fontWeight: '600' }}>
+                              {a.name.length > 20 ? a.name.slice(0, 18) + '…' : a.name}
+                            </Text>
+                          </Pressable>
+                        ))
+                      ) : (
+                        <Pressable onPress={() => Linking.openURL('https://github.com/qq5855144/App-Search/releases/latest')}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: 4,
+                            backgroundColor: '#FFF7E6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+                          <Text style={{ fontSize: 12, color: '#FA8C16' }}>前往查看</Text>
+                          <Ionicons name="open-outline" size={12} color="#FA8C16" />
+                        </Pressable>
+                      )}
+                    </View>
                   )}
                   {updateCheck === 'error' && (
                     <Text style={{ fontSize: 13, color: '#FF4D4F' }}>检测失败，点击重试</Text>
