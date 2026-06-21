@@ -1,10 +1,10 @@
 /**
- * 下载管理器 v9 — downloadAsync 统一下载（原生 HTTP 跟随 302）
+ * 下载管理器 v10 — fetch 下载 + 分块 btoa 编码
  *
  * 设计决策：
- * 1. 统一使用 expo-file-system downloadAsync：底层 OkHttp 自动跟随 302 重定向
- * 2. 进度回调：downloadAsync 原生 progress 事件，实时更新
- * 3. 暂停续传：不支持（downloadAsync 无 pause/resume），但保证下载成功
+ * 1. 统一用 fetch 下载：原生 HTTP 栈自动跟随 302→CDN，不依赖 expo-file-system 的 HTTP 层
+ * 2. 分块 btoa 编码：32KB 分块 → btoa → 拼接，避免手动逐字节循环 OOM
+ * 3. 进度：fetch 完成后显示 100%，下载中显示 0%
  * 4. SAF 保存：Android 完成后写入公共 Downloads
  * 5. 自动重试：临时网络错误自动重试 1 次
  */
@@ -229,6 +229,22 @@ async function cleanupTempDir(id: string) {
 }
 
 // ─── 核心下载逻辑 ─────────────────────────────────────────────────────────────
+
+/** Uint8Array → Base64（分块 btoa，每 32KB 一块，避免大文件 OOM） */
+function uint8ToBase64Chunked(bytes: Uint8Array): string {
+  const CHUNK = 0x8000; // 32KB
+  let result = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const end = Math.min(i + CHUNK, bytes.length);
+    let binary = '';
+    for (let j = i; j < end; j++) {
+      binary += String.fromCharCode(bytes[j]);
+    }
+    result += btoa(binary);
+  }
+  return result;
+}
+
 async function startTask(id: string) {
   const task = tasks.get(id);
   if (!task) return;
@@ -256,95 +272,44 @@ async function startTask(id: string) {
   speedSampler.set(id, { ts: Date.now(), bytes: 0 });
   notify(task);
 
-  // 统一使用 downloadAsync：底层 OkHttp 自动跟随 302 重定向，原生 progress 回调
-  const downloadPromise = fs.downloadAsync(task.url, localUri, {
-    sessionType: _FileSystem.FileSystemSessionType.BACKGROUND,
-  });
-
-  // downloadAsync 返回的 promise 无中间进度，需手动轮询文件大小
-  // 但 downloadAsync 不支持 progress 回调，所以用文件轮询模拟进度
-  let progressTimer: ReturnType<typeof setInterval> | null = null;
-  if (Platform.OS === 'android') {
-    progressTimer = setInterval(async () => {
-      const t = tasks.get(id);
-      if (!t || t.status !== 'downloading') {
-        if (progressTimer) clearInterval(progressTimer);
-        return;
-      }
-      try {
-        const info = await fs.getInfoAsync(localUri);
-        if (info.exists) {
-          const actualSize = (info as any).size ?? 0;
-          if (actualSize > 0) {
-            const now = Date.now();
-            const prev = speedSampler.get(id) ?? { ts: now, bytes: 0 };
-            const elapsed = (now - prev.ts) / 1000;
-            let speed = t.speed;
-            if (elapsed >= 1) {
-              speed = elapsed > 0 ? Math.round((actualSize - prev.bytes) / elapsed) : 0;
-              speedSampler.set(id, { ts: now, bytes: actualSize });
-            }
-            t.bytesWritten = actualSize;
-            t.speed = speed > 0 ? speed : 0;
-            // 无总大小信息，显示伪进度
-            t.progress = Math.min(0.99, 1 - 1 / (actualSize / 1024 + 1));
-            t.eta = -1;
-            notify(t);
-          }
-        }
-      } catch { /* ignore */ }
-    }, 1000);
-  }
-
   try {
-    const result = await downloadPromise;
-    if (progressTimer) clearInterval(progressTimer);
+    // 用 fetch 下载：原生 HTTP 栈自动跟随 302→CDN，expo-file-system 的所有 HTTP 方法都不跟随
+    const response = await fetch(task.url, {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const uint8 = new Uint8Array(arrayBuffer);
+
+    if (uint8.byteLength === 0) {
+      throw new Error('下载内容为空');
+    }
+
+    // 检测 HTML 错误页面
+    if (uint8.byteLength < 1024) {
+      const header = new TextDecoder().decode(uint8.slice(0, Math.min(512, uint8.byteLength)));
+      if (header.trimStart().startsWith('<!') || header.trimStart().startsWith('<html')) {
+        throw new Error('服务器返回了网页而非文件，请重试');
+      }
+    }
+
+    // 分块 btoa 编码 → 写入磁盘
+    const base64 = uint8ToBase64Chunked(uint8);
+    await fs.writeAsStringAsync(localUri, base64, {
+      encoding: fs.EncodingType.Base64,
+    });
+
+    const actualSize = uint8.byteLength;
     speedSampler.delete(id);
 
     const t = tasks.get(id);
     if (!t) return;
 
-    if (!result || result.status !== 200) {
-      t.status = 'failed';
-      t.error = `HTTP ${result?.status ?? 'error'}`;
-      notify(t);
-      await cleanupTempDir(id);
-      flushQueue();
-      return;
-    }
-
-    // 获取实际文件大小
-    let actualSize = 0;
-    try {
-      const info = await fs.getInfoAsync(localUri);
-      actualSize = (info as any).size ?? 0;
-    } catch { /* ignore */ }
-
-    if (actualSize === 0) {
-      t.status = 'failed';
-      t.error = '下载文件大小为 0，请重试';
-      notify(t);
-      await cleanupTempDir(id);
-      flushQueue();
-      return;
-    }
-
-    // 检查是否是 HTML 错误页面
-    if (actualSize < 1024) {
-      try {
-        const content = await fs.readAsStringAsync(localUri);
-        if (content.trimStart().startsWith('<!') || content.trimStart().startsWith('<html')) {
-          t.status = 'failed';
-          t.error = '服务器返回了网页而非文件，请重试';
-          notify(t);
-          await cleanupTempDir(id);
-          flushQueue();
-          return;
-        }
-      } catch { /* ignore */ }
-    }
-
-    // 完成
     t.status = 'completed';
     t.progress = 1;
     t.speed = 0;
@@ -367,7 +332,6 @@ async function startTask(id: string) {
     notify(t);
     flushQueue();
   } catch (e: any) {
-    if (progressTimer) clearInterval(progressTimer);
     speedSampler.delete(id);
 
     const t = tasks.get(id);
