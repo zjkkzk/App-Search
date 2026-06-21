@@ -1,8 +1,9 @@
 /**
- * 下载管理器 v5 — 稳定可靠版
+ * 下载管理器 v6
  *
  * 设计决策：
- * 1. 直接下载：不做 HEAD URL 解析（GitHub 302 由 Android 原生 HTTP 客户端透明跟随）
+ * 1. redirect 预解析：GitHub release asset URL 返回 302，部分 Android 版本 expo-file-system
+ *    跟随后得到 0B 文件；预先用 fetch HEAD 拿到最终 CDN URL 再传给 createDownloadResumable
  * 2. 单线程：移除分片并行（大文件 Base64 合并导致 OOM，且收益有限）
  * 3. 暂停续传：pauseAsync() 保存 resumeData，resume 时带 resumeData 重建 Resumable
  * 4. 进度回调：移除节流门，每次回调都 notify，由 Context 防抖 150ms 控制渲染频率
@@ -14,6 +15,22 @@ import * as _FileSystem from 'expo-file-system/legacy';
 
 const IS_WEB = Platform.OS === 'web';
 const APP_FOLDER_NAME = '开源应用商店';
+
+/**
+ * 解析重定向 URL：GitHub release asset 下载链接会 302 跳转到 CDN
+ * expo-file-system 某些版本跟随后得到 0B 文件，预先解析最终 URL 可规避此问题
+ */
+async function resolveRedirectUrl(url: string): Promise<string> {
+  if (IS_WEB) return url;
+  try {
+    const resp = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+    // fetch 跟随重定向后 resp.url 就是最终 CDN 地址
+    if (resp.url && resp.url !== url) return resp.url;
+  } catch {
+    // 解析失败则降级使用原始 URL
+  }
+  return url;
+}
 const SAF_URI_KEY = '@openappstore/saf_downloads_uri';
 const MAX_CONCURRENT = 3;
 /** 断点续传：持久化 paused/pending 任务到 AsyncStorage，App 重启后可恢复 */
@@ -260,9 +277,11 @@ async function startTask(id: string) {
     notify(t);
   };
 
-  // expo-file-system 原生层自动跟随 302（GitHub releases 直接传原始 URL）
+  // 预解析重定向 URL，避免 GitHub 302 跳转导致 0B 下载
+  const resolvedUrl = await resolveRedirectUrl(task.url);
+
   const resumable = fs.createDownloadResumable(
-    task.url,
+    resolvedUrl,
     localUri,
     {},
     progressCallback,

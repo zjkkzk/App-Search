@@ -46,21 +46,10 @@ jobs:
           _URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           _KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           _AID: ${{ secrets.EXPO_PUBLIC_APP_ID }}
-          _WEB: ${{ secrets.EXPO_PUBLIC_WEB_URL }}
         run: |
           [ -n "$_URL" ] && echo "EXPO_PUBLIC_SUPABASE_URL=$_URL" >> .env || true
           [ -n "$_KEY" ] && echo "EXPO_PUBLIC_SUPABASE_ANON_KEY=$_KEY" >> .env || true
           [ -n "$_AID" ] && echo "EXPO_PUBLIC_APP_ID=$_AID"          >> .env || true
-          # web套壳架构：APK 需要在构建时知道 web 版本的 URL
-          # 优先使用 Secret（自定义域名），否则自动推导 GitHub Pages 地址
-          if [ -n "$_WEB" ]; then
-            echo "EXPO_PUBLIC_WEB_URL=$_WEB" >> .env
-            echo "✅ WEB_URL from secret: $_WEB"
-          else
-            PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-            echo "EXPO_PUBLIC_WEB_URL=${PAGES_URL}" >> .env
-            echo "✅ WEB_URL auto-derived: ${PAGES_URL}"
-          fi
 
       - name: Set versionCode + auto-increment patch version
         run: |
@@ -173,11 +162,10 @@ jobs:
         if: github.ref == 'refs/heads/main'
         id: rename_latest
         run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          DATE=$(date +'%Y%m%d')
-          DEST="android/app/build/outputs/apk/release/openappstore-${DATE}-${SHORT_SHA}.apk"
+          VERSION="1.0.${{ github.run_number }}"
+          DEST="android/app/build/outputs/apk/release/openappstore.${VERSION}.apk"
           mv "${{ steps.apk.outputs.path }}" "$DEST"
-          echo "name=openappstore-${DATE}-${SHORT_SHA}.apk" >> $GITHUB_OUTPUT
+          echo "name=openappstore.${VERSION}.apk" >> $GITHUB_OUTPUT
           echo "path=$DEST" >> $GITHUB_OUTPUT
 
       - name: Publish latest Release (main push)
@@ -185,8 +173,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          DATE=$(date +'%Y%m%d')
+          VERSION="1.0.${{ github.run_number }}"
           APK="${{ steps.rename_latest.outputs.path }}"
           COMMIT_MSG=$(git log -1 --pretty=%s)
 
@@ -194,13 +181,14 @@ jobs:
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
 
           gh release create latest "$APK" \
-            --title "Latest Stable — ${DATE} (${SHORT_SHA})" \
+            --title "Latest Stable — v${VERSION}" \
             --notes "$(cat <<'NOTES'
           ✅ **main 分支最新稳定构建**
 
           | 字段 | 值 |
           |------|-----|
           | Commit | [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+          | 版本号 | v'"${VERSION}"' |
           | 构建编号 | #${{ github.run_number }} |
           | 提交信息 | '"$COMMIT_MSG"' |
           | 构建时间 | '"$(date -u +'%Y-%m-%d %H:%M UTC')"' |
