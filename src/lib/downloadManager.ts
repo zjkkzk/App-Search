@@ -1,30 +1,24 @@
 /**
- * 下载管理器 v19 — Android 改用系统 DownloadManager（Web 壳架构）
+ * 下载管理器 v20 — 统一引擎，修复4处缺陷，清理死代码
  *
- * 引擎选择：
- *  - Android : Linking.openURL() → 系统浏览器/DownloadManager 全权处理
- *              (下载进度在通知栏，文件存入系统 Downloads，安装时打开系统文件管理)
- *  - iOS     : expo-file-system (NSURLSession) — 原生 iOS 网络层，断点续传
- *  - Web     : window.open() 交给浏览器
+ * 引擎：
+ *  - Android/iOS : expo-file-system createDownloadResumable（应用内下载，进度可追踪）
+ *  - Web         : window.open() 交给浏览器
  *
- * Android 存储策略：
- *  - 由系统 DownloadManager 托管，APK 落盘至系统 Downloads 目录
- *  - 应用侧不持有文件路径，localUri 标记为 '__browser__'
+ * 存储策略：
+ *  - 下载至 documentDirectory/dl_${id}/ 临时目录
+ *  - 完成后 moveAsync → dl_perm/${filename}（持久目录）
+ *  - Android 通过 FileProvider getContentUriAsync 暴露给安装器
+ *  - iOS 通过 shareAsync 暴露给安装器
  *
- * iOS 存储策略：
- *  - 文件下载到 documentDirectory/dl_${id}/ 临时目录
- *  - 完成后 moveAsync → dl_perm/，通过 share 暴露给安装器
- *
- * iOS 重试策略：
- *  - 保留 resumeData，NSURLSession 字节级续传
- *  - 最多自动重试 5 次，指数退避（2s/4s/8s…），瞬态错误自动恢复
+ * 重试策略：
+ *  - 最多自动重试 5 次，指数退避（2s/4s/8s…30s）
+ *  - 瞬态错误（断网/超时/RST_STREAM/Download interrupted）自动恢复
+ *  - iOS：保留 resumeData，字节级续传；Android：暂停后重头下
  */
-import { Platform, Linking } from 'react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as _FileSystem from 'expo-file-system/legacy';
-
-/** Android 系统下载任务的 localUri 占位标记 */
-export const BROWSER_DOWNLOAD_MARKER = '__browser__';
 
 const IS_WEB = Platform.OS === 'web';
 const MAX_CONCURRENT = 3;
@@ -201,7 +195,7 @@ async function moveToPermanentStorage(tempUri: string, filename: string): Promis
 
 // ─── 核心下载逻辑 ─────────────────────────────────────────────────────────────
 
-/** 通用进度更新（Android RNBlobUtil / iOS expo-fs 均复用） */
+/** 通用进度更新（Android / iOS 均复用） */
 function applyProgress(id: string, bytesWritten: number, totalBytes: number) {
   const t = tasks.get(id);
   if (!t || t.status !== 'downloading') return;
@@ -221,46 +215,28 @@ function applyProgress(id: string, bytesWritten: number, totalBytes: number) {
   notify(t);
 }
 
-/** Android：系统 DownloadManager — 调起系统浏览器，交由系统全权处理重定向/下载/通知 */
-async function startTaskAndroid(id: string) {
-  const task = tasks.get(id);
-  if (!task) return;
-
-  task.status = 'downloading';
-  task.error = null;
-  task.progress = 0;
-  notify(task);
-
-  try {
-    // 调起系统浏览器/Chrome，让 Android DownloadManager 处理下载
-    // 自动跟随 302 重定向、断点续传、通知栏进度，文件存入系统 Downloads
-    await Linking.openURL(task.url);
-    task.status = 'completed';
-    task.progress = 1;
-    // localUri 标记为 __browser__：文件由系统托管，非应用私有路径
-    task.localUri = BROWSER_DOWNLOAD_MARKER;
-    task.error = null;
-  } catch (e: any) {
-    task.status = 'failed';
-    task.error = '无法调起下载，请检查网络或手动复制链接';
-  }
-  notify(task);
-  flushQueue();
-}
-
-/** iOS：expo-file-system (NSURLSession) + 断点续传 */
-async function startTaskIOS(id: string) {
+/**
+ * 应用内下载（Android + iOS 统一）
+ *
+ * - 使用 expo-file-system createDownloadResumable
+ * - iOS 保留 resumeData 实现字节级续传；Android 暂停后重头下
+ * - 完成后移入 dl_perm/ 持久目录：
+ *     Android → getContentUriAsync → 安装器 intent
+ *     iOS     → shareAsync → 安装器
+ */
+async function startTaskNative(id: string) {
   const task = tasks.get(id);
   if (!task) return;
 
   const fs = getFS()!;
   const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
   const localUri = `${tempDir}${task.filename}`;
+  // iOS 支持字节级续传；Android 暂停后重头下，resumeKey 仍写入以保持接口一致
   const resumeKey = `${RESUME_KEY_PREFIX}${id}`;
 
   await fs.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => null);
 
-  // 加载断点续传数据
+  // 加载断点续传数据（iOS 有效；Android 若服务端支持 Range 亦可恢复）
   let resumeData: string | undefined;
   try {
     const saved = await AsyncStorage.getItem(resumeKey);
@@ -300,7 +276,7 @@ async function startTaskIOS(id: string) {
   let lastSaveTs = 0;
   activeSessions.set(id, resumable);
 
-  // 卡顿检测
+  // 卡顿检测：60s 无新字节 → 取消并重试
   let lastStallBytes = 0;
   const stallTimer = setInterval(() => {
     const t = tasks.get(id);
@@ -316,7 +292,7 @@ async function startTaskIOS(id: string) {
       if ((t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
         t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
         t.status = 'pending';
-        t.error = `网络中断，自动续传 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+        t.error = `网络中断，自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
         t.speed = 0; t.eta = -1;
         notify(t);
         setTimeout(() => flushQueue(), 2_000);
@@ -348,6 +324,7 @@ async function startTaskIOS(id: string) {
       flushQueue(); return;
     }
 
+    // 验证文件大小非零
     const info = await fs.getInfoAsync(result.uri).catch(() => ({ exists: false }));
     const actualSize: number = info.exists ? ((info as any).size ?? 0) : 0;
     if (actualSize === 0) {
@@ -355,9 +332,22 @@ async function startTaskIOS(id: string) {
       await cleanupTempDir(id); flushQueue(); return;
     }
 
+    // 移入持久目录（Android FileProvider / iOS shareAsync 均可访问）
+    try {
+      const permUri = await moveToPermanentStorage(result.uri, t.filename);
+      t.localUri = permUri;
+    } catch {
+      // 移动失败则保留临时目录路径（安装仍可使用）
+      t.localUri = result.uri;
+    }
+    // 清理临时目录（若文件已成功移走）
+    if (t.localUri !== result.uri) {
+      await cleanupTempDir(id);
+    }
+
     t.status = 'completed'; t.progress = 1; t.speed = 0; t.eta = 0;
     t.bytesWritten = actualSize; t.totalBytes = actualSize;
-    t.localUri = result.uri;
+    t.error = null;
     notify(t); flushQueue();
   } catch (e: any) {
     clearInterval(stallTimer);
@@ -367,15 +357,17 @@ async function startTaskIOS(id: string) {
 
     const t = tasks.get(id);
     if (!t) { flushQueue(); return; }
+    if (t.status === 'cancelled' || t.status === 'paused') { flushQueue(); return; }
 
     const msg: string = e?.message ?? '';
     if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
       t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
       const delay = retryDelay(t._autoRetryCount);
       t.status = 'pending';
-      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动续传中 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
       t.speed = 0; t.eta = -1;
       notify(t);
+      // RST_STREAM 类错误清除 resumeData，从头下
       const isReset = msg.includes('stream was reset') || msg.includes('CANCEL') || msg.includes('RST_STREAM');
       if (isReset) {
         await AsyncStorage.removeItem(resumeKey).catch(() => null);
@@ -407,10 +399,7 @@ async function startTask(id: string) {
   const fs = getFS();
   if (!fs) { task.status = 'failed'; task.error = '文件系统不可用'; notify(task); flushQueue(); return; }
 
-  if (Platform.OS === 'android') {
-    return startTaskAndroid(id);
-  }
-  return startTaskIOS(id);
+  return startTaskNative(id);
 }
 
 // ─── 公开 API ─────────────────────────────────────────────────────────────────
@@ -535,9 +524,14 @@ export async function deleteFile(id: string): Promise<void> {
     return;
   }
 
-  if (!IS_WEB && task.localUri) {
+  if (!IS_WEB) {
     const fs = getFS();
-    if (fs) await fs.deleteAsync(task.localUri, { idempotent: true }).catch(() => null);
+    if (fs) {
+      // 删除持久目录中的文件
+      if (task.localUri) await fs.deleteAsync(task.localUri, { idempotent: true }).catch(() => null);
+      // 清理临时下载目录（防止文件移动失败时残留）
+      await cleanupTempDir(id);
+    }
   }
 
   tasks.delete(id);
@@ -546,8 +540,12 @@ export async function deleteFile(id: string): Promise<void> {
 }
 
 export function clearFinished(): void {
+  const fs = IS_WEB ? null : getFS();
   for (const [id, task] of tasks.entries()) {
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+      // 同步删除磁盘文件（fire-and-forget）
+      if (fs && task.localUri) fs.deleteAsync(task.localUri, { idempotent: true }).catch(() => null);
+      if (fs) cleanupTempDir(id);
       tasks.delete(id);
       speedSampler.delete(id);
     }
@@ -575,10 +573,6 @@ export function resumeAll(): void {
     if (task.status === 'paused') {
       task.status = 'pending';
       task.error = null;
-      // Android 无断点，重置进度从头下
-      if (Platform.OS === 'android') {
-        task.progress = 0; task.bytesWritten = 0; task.totalBytes = 0;
-      }
       notify(task);
     }
   }
