@@ -1,8 +1,12 @@
 /**
- * 下载管理器 v15 — expo-file-system createDownloadResumable（精简稳定版）
+ * 下载管理器 v16 — 统一下载路径 + GitHub URL 优先续传
  *
- * 使用 Expo 官方 createDownloadResumable，平台底层（Android HttpURLConnection /
- * iOS NSURLSession）均默认跟随 302 重定向，无需额外预解析。
+ * 策略：
+ *  1. 始终使用 task.url（github.com 原始链接），从不缓存 CDN 签名 URL
+ *  2. 下载完成后统一 moveAsync → dl_perm/，通过 FileProvider 安装，不走 SAF base64
+ *  3. RST_STREAM/CANCEL 等 HTTP/2 CDN 错误：立即清除 resumeData + 部分文件，
+ *     下一次重试用原始 URL 让 GitHub 生成新鲜 CDN 链接（等同 wget -c 语义）
+ *  4. 普通瞬态错误（断网/超时）：保留部分文件 + resumeData，续传节省流量
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -11,10 +15,7 @@ import * as _FileSystem from 'expo-file-system/legacy';
 const IS_WEB = Platform.OS === 'web';
 const SAF_URI_KEY = '@openappstore/saf_downloads_uri';
 const MAX_CONCURRENT = 3;
-// 32MB 以下才走 SAF base64 写入（自身 APK ≈42MB 会绕开，避免低内存静默写 0 字节）
-const SAF_BASE64_MAX_SIZE = 32 * 1024 * 1024;
-// 超大文件（>32MB）下载后移入持久存储目录（documentDirectory/dl_perm/）
-// 与 tempDir (dl_<id>/) 隔离，系统不会自动清理，且可通过 FileProvider 安装
+// 所有文件（不论大小）统一移入持久目录，通过 FileProvider 安装
 const PERM_DIR_NAME = 'dl_perm';
 const MAX_AUTO_RETRY = 5;                              // 最多自动续传 5 次
 const RESUME_KEY_PREFIX = '@openappstore/resume_';     // AsyncStorage 断点数据 key
@@ -69,69 +70,6 @@ export async function resetDownloadsPermission(): Promise<void> {
 export async function hasDownloadsPermission(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   return (await loadSafUri()) !== null;
-}
-
-async function moveToSafDownloads(tempUri: string, filename: string, expectedSize: number): Promise<{ uri: string; safFailed: boolean }> {
-  const fs = getFS();
-  if (!fs) return { uri: tempUri, safFailed: true };  // 无 FS → 文件仍在 tempDir
-  // destUri 提升到 try 外，catch 块清理时可访问
-  let destUri = '';
-  try {
-    const dirUri = await loadSafUri();
-    if (!dirUri) return { uri: tempUri, safFailed: true };  // 无 SAF 权限 → 文件仍在 tempDir
-
-    let actualSize = expectedSize;
-    if (actualSize <= 0) {
-      try {
-        const info = await fs.getInfoAsync(tempUri);
-        actualSize = (info as any).size ?? 0;
-      } catch { /* ignore */ }
-    }
-
-    if (actualSize > SAF_BASE64_MAX_SIZE) {
-      console.warn(`[DownloadManager] ${filename} (${(actualSize / 1024 / 1024).toFixed(1)}MB) 超过 SAF 限制，保留在缓存`);
-      return { uri: tempUri, safFailed: true };
-    }
-
-    destUri = await fs.StorageAccessFramework.createFileAsync(
-      dirUri, filename, getMimeType(filename)
-    );
-    const base64 = await fs.readAsStringAsync(tempUri, { encoding: fs.EncodingType.Base64 });
-
-    // 防止 readAsStringAsync 静默返回空串（低内存时有发生）
-    if (!base64 || base64.length < 16) {
-      throw new Error(`base64 read 返回空结果 (size=${actualSize})`);
-    }
-
-    await fs.StorageAccessFramework.writeAsStringAsync(destUri, base64, {
-      encoding: fs.EncodingType.Base64,
-    });
-
-    // 写后验证：SAF writeAsStringAsync 在低内存时可静默写 0 字节
-    try {
-      const destInfo = await fs.getInfoAsync(destUri);
-      const destSize = (destInfo as any).size ?? -1;
-      // 允许 base64 编码膨胀，原始大小应至少 actualSize * 0.5
-      if (destSize >= 0 && destSize < actualSize * 0.5) {
-        throw new Error(`SAF 写入大小异常: 期望≥${actualSize}, 实际${destSize}`);
-      }
-    } catch (verifyErr) {
-      // getInfoAsync 对某些 SAF URI 可能不支持，仅当有明确大小时才报错
-      const msg = (verifyErr as Error)?.message ?? '';
-      if (msg.includes('SAF 写入大小异常')) throw verifyErr;
-      // 否则忽略验证失败（保守继续）
-    }
-
-    await fs.deleteAsync(tempUri, { idempotent: true }).catch(() => null);
-    return { uri: destUri, safFailed: false };
-  } catch (e) {
-    console.warn('[DownloadManager] SAF 移动失败:', (e as Error)?.message);
-    // 主动清理已创建但写入损坏的 SAF 目标文件，避免用户在下载目录看到残留 0B 灰包
-    if (destUri) {
-      await fs.deleteAsync(destUri, { idempotent: true }).catch(() => null);
-    }
-    return { uri: tempUri, safFailed: true };
-  }
 }
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
@@ -457,27 +395,17 @@ async function startTask(id: string) {
     t.totalBytes = actualSize;
 
     if (Platform.OS === 'android') {
-      let safResult = { uri: result.uri, safFailed: true };
+      // 统一路径：所有文件移入持久目录，通过 FileProvider content URI 安装
+      // 不再区分文件大小，不再走 SAF base64（彻底避免 0 字节灰包和内存溢出）
       try {
-        safResult = await moveToSafDownloads(result.uri, t.filename, actualSize);
-      } catch (safErr) {
-        console.warn('[DownloadManager] SAF 移动异常（已忽略）:', (safErr as Error)?.message);
+        const permUri = await moveToPermanentStorage(result.uri, t.filename);
+        t.localUri = permUri;
+        t.error = null;
+      } catch (mvErr) {
+        console.warn('[DownloadManager] 持久化移动失败，保留 tempDir:', (mvErr as Error)?.message);
+        t.localUri = result.uri;
       }
-      if (safResult.safFailed) {
-        // 大文件或 SAF 失败：移入持久存储，避免 tempDir 被系统回收
-        try {
-          const permUri = await moveToPermanentStorage(safResult.uri, t.filename);
-          t.localUri = permUri;
-          t.error = null;
-        } catch (mvErr) {
-          console.warn('[DownloadManager] 持久化移动失败，保留 tempDir:', (mvErr as Error)?.message);
-          t.localUri = safResult.uri;
-          t.error = '文件已保存到缓存目录（可正常安装）';
-        }
-      } else {
-        t.localUri = safResult.uri;
-      }
-      // 只有文件实际被移出 tempDir 才删除临时目录
+      // 文件已移出 tempDir 才删除临时目录
       if (!t.localUri!.startsWith(tempDir)) {
         await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
       }
@@ -505,18 +433,18 @@ async function startTask(id: string) {
       t.speed = 0;
       t.eta = -1;
       notify(t);
-      // HTTP/2 RST_STREAM 类错误：CDN 签名 URL 可能已过期
-      // 重试 ≥2 次后清除 resumeData，让下次从头下（拿到新鲜 URL）
+      // HTTP/2 RST_STREAM 类错误：CDN 签名 URL 在 resumeData 里已过期
+      // 立即清除 resumeData + 部分文件，下次重试用原始 github.com URL 拿新鲜 CDN 链接
+      // （等同 wget -c 失败后重新执行同一命令的语义）
       const isHttp2Reset = msg.includes('stream was reset') || msg.includes('CANCEL') || msg.includes('RST_STREAM');
-      if (isHttp2Reset && (t._autoRetryCount ?? 0) >= 2) {
+      if (isHttp2Reset) {
         await AsyncStorage.removeItem(resumeKey).catch(() => null);
-        // 同时清除本地部分文件，避免用过期 resumeData 续传乱序
         await cleanupTempDir(id);
         t.bytesWritten = 0;
         t.totalBytes = 0;
         t.progress = 0;
       }
-      // ⚠️ 其他瞬态错误：不删 tempDir，保留部分文件用于续传
+      // 普通瞬态错误（断网/超时）：保留部分文件 + resumeData，下次续传节省流量
       flushQueue();
       return;
     }
