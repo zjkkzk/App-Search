@@ -471,13 +471,20 @@ export async function fetchReleases(owner: string, repo: string, page = 1, bypas
   if (Array.isArray(list)) {
     result = parseReleases(list)
   } else {
-    // 代理失败 → 直连
+    // 代理失败 / bypassCache → 直连 GitHub API
+    // bypassCache 时加时间戳参数绕过 GitHub CDN 60 秒强制缓存
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     }
+    if (bypassCache) {
+      // no-cache 头 + _t 时间戳双重保险，强制 CDN 回源
+      headers['Cache-Control'] = 'no-cache, no-store';
+      headers['Pragma'] = 'no-cache';
+    }
     if (cachedToken) headers['Authorization'] = `Bearer ${cachedToken}`
-    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/releases?page=${page}&per_page=10`, { headers })
+    const cacheBust = bypassCache ? `&_t=${Date.now()}` : ''
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/releases?page=${page}&per_page=10${cacheBust}`, { headers })
     if (res.status === 403 || res.status === 429) {
       // 速率限制：返回空数组，不抛错
       console.warn(`[GitHub] Releases 速率限制: ${owner}/${repo}`);
@@ -486,8 +493,8 @@ export async function fetchReleases(owner: string, repo: string, page = 1, bypas
     if (!res.ok) throw new Error(`获取 Releases 失败 (${res.status})`)
     result = parseReleases(await res.json())
   }
-  // 仅缓存非空结果
-  if (result.length > 0) {
+  // bypassCache 时不写入本地缓存，确保下次仍能取到最新数据
+  if (result.length > 0 && !bypassCache) {
     await setCache(cacheKey, result, DAY)
   }
   return result

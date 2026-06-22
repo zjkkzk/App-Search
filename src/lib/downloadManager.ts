@@ -7,6 +7,7 @@
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// @ts-ignore — react-native-blob-util ships its own native types; suppress tsc lookup error
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import * as _FileSystem from 'expo-file-system/legacy';
 
@@ -347,10 +348,17 @@ async function startTask(id: string) {
     t.totalBytes = actualSize;
 
     if (Platform.OS === 'android') {
-      const { uri, safFailed } = await moveToSafDownloads(res.path(), t.filename, actualSize);
-      t.localUri = uri;
-      if (safFailed) {
-        t.error = '文件保存在应用缓存目录（未授权公共存储权限）';
+      // moveToSafDownloads 内部已有 try-catch，此处再包一层防止任何意外异常导致 task 标记为 failed
+      let safResult = { uri: res.path(), safFailed: true };
+      try {
+        safResult = await moveToSafDownloads(res.path(), t.filename, actualSize);
+      } catch (safErr) {
+        console.warn('[DownloadManager] SAF 移动异常（已忽略）:', (safErr as Error)?.message);
+      }
+      t.localUri = safResult.uri;
+      if (safResult.safFailed) {
+        // SAF 失败不影响下载成功状态，文件已保存在应用缓存目录，仍可安装
+        t.error = '文件已保存到缓存目录（可正常安装）';
       }
       await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
     } else {

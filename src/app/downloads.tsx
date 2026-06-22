@@ -244,7 +244,7 @@ export default function DownloadsScreen() {
             )}
             {item.status === 'paused' && (
               <Text style={{ fontSize: 12, color: ORANGE, fontWeight: '500' }}>
-                已暂停 · {pct}%{item.resumeData ? ' · 可续传' : ''}
+                已暂停 · {pct}%
               </Text>
             )}
             {item.status === 'pending' && (

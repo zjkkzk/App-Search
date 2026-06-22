@@ -23,6 +23,7 @@ import {
   ToastAndroid,
   View,
 } from 'react-native';
+// @ts-ignore — react-native-webview ships native types separately
 import { WebView, type WebViewNavigation } from 'react-native-webview';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -100,7 +101,7 @@ export default function WebShell() {
         onNavigationStateChange={onNavigationStateChange}
         onLoadStart={() => { setLoading(true); setError(null); }}
         onLoadEnd={() => setLoading(false)}
-        onError={(e) => {
+        onError={(e: any) => {
           setLoading(false);
           setError(e.nativeEvent.description || '页面加载失败');
         }}

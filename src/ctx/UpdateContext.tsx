@@ -215,7 +215,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   // 监听下载完成 → 自动记录 installed_apps + 触发检测
   useEffect(() => {
     const unsub = DM.subscribe((task) => {
-      if (task.status === 'completed' && task.appId > 0) {
+      if ('status' in task && task.status === 'completed' && task.appId > 0) {
         (async () => {
           try {
             await upsertInstalledApp({
