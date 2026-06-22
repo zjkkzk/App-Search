@@ -209,6 +209,11 @@ async function moveToPermanentStorage(tempUri: string, filename: string): Promis
   // 目标已存在则先删除（同名旧版本）
   await fs.deleteAsync(destUri, { idempotent: true }).catch(() => null);
   await fs.moveAsync({ from: tempUri, to: destUri });
+  // 移动后验证目标文件确实存在且非空
+  const info = await fs.getInfoAsync(destUri).catch(() => ({ exists: false }));
+  if (!info.exists || (info as any).size === 0) {
+    throw new Error(`moveAsync 后目标文件不存在或大小为0: ${destUri}`);
+  }
   return destUri;
 }
 
