@@ -126,13 +126,27 @@ function isTransientError(msg: string): boolean {
     msg.includes('ECONNREFUSED') ||
     msg.includes('ENOTFOUND') ||
     msg.includes('socket hang up') ||
-    // GitHub CDN HTTP/2 RST_STREAM CANCEL — Android OkHttp 与 GitHub CDN 的 HTTP/2
-    // 连接被服务端重置，属于暂时性 CDN 问题，重试可恢复
+    // GitHub CDN HTTP/2 RST_STREAM — OkHttp3 被服务端重置，属于暂时性 CDN 问题
     msg.includes('stream was reset') ||
     msg.includes('CANCEL') ||
     msg.includes('RST_STREAM') ||
-    msg.includes('unexpected end of stream')
+    msg.includes('unexpected end of stream') ||
+    // OkHttp3 / Android HttpURLConnection 连接中途断开（大文件常见）
+    msg.includes('Download interrupted') ||
+    msg.includes('IOException') ||
+    msg.includes('read timed out') ||
+    msg.includes('connection timed out') ||
+    // GitHub CDN 限速/过载（临时）
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('Too Many Requests') ||
+    msg.includes('Service Unavailable')
   );
+}
+
+/** 计算第 n 次重试的退避延迟（指数退避，上限 30s） */
+function retryDelay(retryCount: number): number {
+  return Math.min(30_000, 1_000 * (2 ** retryCount));
 }
 
 function mapErrorMessage(msg: string): string {
@@ -145,12 +159,16 @@ function mapErrorMessage(msg: string): string {
     return '下载链接已失效（403），请重新获取';
   if (msg.includes('404') || msg.includes('Not Found'))
     return '文件不存在（404），该版本可能已删除';
-  if (msg.includes('timeout') || msg.includes('ETIMEDOUT'))
+  if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('read timed out'))
     return '下载超时，请检查网络后重试';
   if (msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED'))
     return '连接被重置，请检查网络后重试';
   if (msg.includes('ENOTFOUND') || msg.includes('DNS'))
     return 'DNS 解析失败，请检查网络连接';
+  if (msg.includes('Download interrupted') || msg.includes('IOException'))
+    return '下载连接中断，请检查网络后重试';
+  if (msg.includes('503') || msg.includes('429') || msg.includes('Too Many Requests'))
+    return '服务器繁忙，稍后自动重试';
   return msg;
 }
 
@@ -256,13 +274,15 @@ async function startTaskAndroid(id: string) {
         t.speed = 0; t.eta = -1;
         cleanupTempDir(id);
         t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
+        notify(t);
+        setTimeout(() => flushQueue(), 2_000);
       } else {
         t.status = 'failed';
         t.error = '下载超时，请检查网络后手动重试';
         cleanupTempDir(id);
+        notify(t);
+        flushQueue();
       }
-      notify(t);
-      flushQueue();
     } else {
       lastStallBytes = t.bytesWritten;
     }
@@ -330,14 +350,15 @@ async function startTaskAndroid(id: string) {
     const msg: string = e?.message ?? String(e ?? '');
     if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
       t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
+      const delay = retryDelay(t._autoRetryCount);
       t.status = 'pending';
-      t.error = `网络波动，自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
       t.speed = 0; t.eta = -1;
       // 每次重试都从头下（OkHttp3 无内置断点续传接口）
       await cleanupTempDir(id);
       t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
       notify(t);
-      flushQueue();
+      setTimeout(() => flushQueue(), delay);
       return;
     }
 
@@ -419,13 +440,16 @@ async function startTaskIOS(id: string) {
         t.status = 'pending';
         t.error = `网络中断，自动续传 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
         t.speed = 0; t.eta = -1;
+        notify(t);
+        setTimeout(() => flushQueue(), 2_000);
       } else {
         t.status = 'failed';
         t.error = '下载超时，请检查网络后手动重试';
         AsyncStorage.removeItem(resumeKey).catch(() => null);
         cleanupTempDir(id);
+        notify(t);
+        flushQueue();
       }
-      notify(t); flushQueue();
     } else { lastStallBytes = t.bytesWritten; }
   }, 60_000);
 
@@ -469,8 +493,9 @@ async function startTaskIOS(id: string) {
     const msg: string = e?.message ?? '';
     if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
       t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
+      const delay = retryDelay(t._autoRetryCount);
       t.status = 'pending';
-      t.error = `网络波动，自动续传中 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动续传中 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
       t.speed = 0; t.eta = -1;
       notify(t);
       const isReset = msg.includes('stream was reset') || msg.includes('CANCEL') || msg.includes('RST_STREAM');
@@ -479,7 +504,8 @@ async function startTaskIOS(id: string) {
         await cleanupTempDir(id);
         t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
       }
-      flushQueue(); return;
+      setTimeout(() => flushQueue(), delay);
+      return;
     }
 
     t.status = 'failed'; t.error = mapErrorMessage(msg); notify(t);
