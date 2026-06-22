@@ -190,6 +190,16 @@ export default function DownloadsScreen() {
     if (!item.localUri || installingId) return;
     setInstallingId(item.id);
     try {
+      // Android 系统下载：文件由系统 DownloadManager 托管，打开系统下载文件夹
+      if (Platform.OS === 'android' && item.localUri === '__browser__') {
+        const IL = await import('expo-intent-launcher');
+        await IL.startActivityAsync('android.intent.action.VIEW', {
+          data: 'content://downloads/my_downloads',
+          flags: 1,
+        });
+        return;
+      }
+
       if (Platform.OS === 'android') {
         const IL = await import('expo-intent-launcher');
         const FS = await import('expo-file-system/legacy');
@@ -348,12 +358,19 @@ export default function DownloadsScreen() {
             {item.status === 'completed' && item.localUri && (
               isInstalling
                 ? <ActivityIndicator size={20} color={GREEN} style={{ width: 34, height: 34 }} />
-                : <ActionBtn
-                    icon={isInstaller ? 'phone-portrait-outline' : 'open-outline'}
-                    color={GREEN} bg="#F6FFED"
-                    label={isInstaller ? '安装' : '打开'}
-                    onPress={() => handleInstall(item)}
-                  />
+                : item.localUri === '__browser__'
+                  ? <ActionBtn
+                      icon="folder-open-outline"
+                      color={BLUE} bg="#E6F7FF"
+                      label="查看下载"
+                      onPress={() => handleInstall(item)}
+                    />
+                  : <ActionBtn
+                      icon={isInstaller ? 'phone-portrait-outline' : 'open-outline'}
+                      color={GREEN} bg="#F6FFED"
+                      label={isInstaller ? '安装' : '打开'}
+                      onPress={() => handleInstall(item)}
+                    />
             )}
             {item.status === 'failed' && (
               <ActionBtn icon="refresh" color={BLUE} bg="#E6F7FF" onPress={() => retry(item.id)} />

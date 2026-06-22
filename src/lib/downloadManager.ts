@@ -1,25 +1,30 @@
 /**
- * 下载管理器 v18 — 清理 SAF 死代码，健壮 pauseAll/clearAllTasks
+ * 下载管理器 v19 — Android 改用系统 DownloadManager（Web 壳架构）
  *
  * 引擎选择：
- *  - Android : react-native-blob-util (OkHttp3) — 与浏览器/系统下载管理器同层 HTTP 栈
+ *  - Android : Linking.openURL() → 系统浏览器/DownloadManager 全权处理
+ *              (下载进度在通知栏，文件存入系统 Downloads，安装时打开系统文件管理)
  *  - iOS     : expo-file-system (NSURLSession) — 原生 iOS 网络层，断点续传
  *  - Web     : window.open() 交给浏览器
  *
- * 存储策略：
- *  - 文件统一下载到 documentDirectory/dl_${id}/ 临时目录
- *  - 完成后 moveAsync → dl_perm/，通过 FileProvider content:// 暴露给安装器
- *  - 无需 SAF/公共 Downloads 权限（app-private 存储，Android 7+ 免权限）
+ * Android 存储策略：
+ *  - 由系统 DownloadManager 托管，APK 落盘至系统 Downloads 目录
+ *  - 应用侧不持有文件路径，localUri 标记为 '__browser__'
  *
- * 重试策略：
- *  - Android：每次重试从头下载（OkHttp3 无内置断点续传接口）
- *  - iOS：保留 resumeData，NSURLSession 字节级续传
- *  - 最多自动重试 5 次，瞬态错误（断网/超时/RST_STREAM）自动恢复
+ * iOS 存储策略：
+ *  - 文件下载到 documentDirectory/dl_${id}/ 临时目录
+ *  - 完成后 moveAsync → dl_perm/，通过 share 暴露给安装器
+ *
+ * iOS 重试策略：
+ *  - 保留 resumeData，NSURLSession 字节级续传
+ *  - 最多自动重试 5 次，指数退避（2s/4s/8s…），瞬态错误自动恢复
  */
-import { Platform } from 'react-native';
+import { Platform, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as _FileSystem from 'expo-file-system/legacy';
-import RNBlobUtil from 'react-native-blob-util';
+
+/** Android 系统下载任务的 localUri 占位标记 */
+export const BROWSER_DOWNLOAD_MARKER = '__browser__';
 
 const IS_WEB = Platform.OS === 'web';
 const MAX_CONCURRENT = 3;
@@ -100,9 +105,6 @@ const tasks = new Map<string, DownloadTask>();
 const subscribers = new Set<ProgressCallback>();
 /** 活跃的 expo-file-system DownloadResumable（iOS 专用） */
 const activeSessions = new Map<string, _FileSystem.DownloadResumable>();
-/** 活跃的 react-native-blob-util 任务（Android 专用），用于取消 */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const activeRnbTasks = new Map<string, any>();
 const speedSampler = new Map<string, { ts: number; bytes: number }>();
 
 function genId(): string { return `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
@@ -219,155 +221,31 @@ function applyProgress(id: string, bytesWritten: number, totalBytes: number) {
   notify(t);
 }
 
-/** Android：react-native-blob-util (OkHttp3) — 与浏览器同 HTTP 栈，天然处理重定向和大文件 */
+/** Android：系统 DownloadManager — 调起系统浏览器，交由系统全权处理重定向/下载/通知 */
 async function startTaskAndroid(id: string) {
   const task = tasks.get(id);
   if (!task) return;
 
-  const fs = getFS()!;
-  const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
-  // RNBlobUtil 需要绝对路径（不含 file:// 前缀）
-  const absPath = `${tempDir.replace(/^file:\/\//, '')}${task.filename}`;
-
-  await fs.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => null);
-
   task.status = 'downloading';
   task.error = null;
   task.progress = 0;
-  task.bytesWritten = 0;
-  task.totalBytes = 0;
-  task.speed = 0;
-  task.eta = -1;
   notify(task);
 
-  // OkHttp3 直接跟随 302 → CDN，无需手动处理重定向
-  const rnbTask = RNBlobUtil.config({
-    path: absPath,
-    timeout: 60000,
-    followRedirect: true,
-  }).fetch('GET', task.url, {
-    // 模拟移动浏览器 UA，避免被 GitHub CDN 判断为机器人降级
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
-    'Accept': '*/*',
-  });
-
-  activeRnbTasks.set(id, rnbTask);
-
-  // 进度回调：written/total 是字节数字符串
-  rnbTask.progress({ interval: 300, count: -1 }, (written: number, total: number) => {
-    applyProgress(id, written || 0, total || 0);
-  });
-
-  // 卡顿检测：60s 无进度 → 取消并重试
-  let lastStallBytes = 0;
-  const stallTimer = setInterval(() => {
-    const t = tasks.get(id);
-    if (!t || t.status !== 'downloading') { clearInterval(stallTimer); return; }
-    if (t.bytesWritten === lastStallBytes) {
-      clearInterval(stallTimer);
-      activeRnbTasks.get(id)?.cancel?.();
-      activeRnbTasks.delete(id);
-      if ((t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
-        t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
-        t.status = 'pending';
-        t.error = `网络中断，自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
-        t.speed = 0; t.eta = -1;
-        cleanupTempDir(id);
-        t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
-        notify(t);
-        setTimeout(() => flushQueue(), 2_000);
-      } else {
-        t.status = 'failed';
-        t.error = '下载超时，请检查网络后手动重试';
-        cleanupTempDir(id);
-        notify(t);
-        flushQueue();
-      }
-    } else {
-      lastStallBytes = t.bytesWritten;
-    }
-  }, 60_000);
-
   try {
-    const res = await rnbTask;
-    clearInterval(stallTimer);
-    activeRnbTasks.delete(id);
-    speedSampler.delete(id);
-
-    const t = tasks.get(id);
-    if (!t) return;
-
-    // 被取消/暂停时 RNBlobUtil 会 reject，不会走到这里；若 task 状态已变则跳过
-    if (t.status === 'cancelled' || t.status === 'paused') { flushQueue(); return; }
-
-    // 获取绝对路径，转为 file:// URI 供 expo-fs 操作
-    const downloadedPath = res.path();
-    const downloadedUri = `file://${downloadedPath}`;
-
-    // 验证文件大小
-    const info = await fs.getInfoAsync(downloadedUri).catch(() => ({ exists: false }));
-    const actualSize: number = info.exists ? ((info as any).size ?? 0) : 0;
-    if (actualSize === 0) {
-      t.status = 'failed';
-      t.error = '下载文件大小为 0，请重试';
-      notify(t);
-      await cleanupTempDir(id);
-      flushQueue();
-      return;
-    }
-
-    t.status = 'completed';
-    t.progress = 1;
-    t.speed = 0;
-    t.eta = 0;
-    t.bytesWritten = actualSize;
-    t.totalBytes = actualSize;
-
-    // 移入持久目录，FileProvider 可通过 content:// 暴露给安装器
-    try {
-      const permUri = await moveToPermanentStorage(downloadedUri, t.filename);
-      t.localUri = permUri;
-      t.error = null;
-    } catch (mvErr) {
-      console.warn('[DownloadManager] 持久化移动失败，保留 tempDir:', (mvErr as Error)?.message);
-      t.localUri = downloadedUri;
-    }
-    if (!t.localUri!.startsWith(tempDir)) {
-      await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
-    }
-
-    notify(t);
-    flushQueue();
+    // 调起系统浏览器/Chrome，让 Android DownloadManager 处理下载
+    // 自动跟随 302 重定向、断点续传、通知栏进度，文件存入系统 Downloads
+    await Linking.openURL(task.url);
+    task.status = 'completed';
+    task.progress = 1;
+    // localUri 标记为 __browser__：文件由系统托管，非应用私有路径
+    task.localUri = BROWSER_DOWNLOAD_MARKER;
+    task.error = null;
   } catch (e: any) {
-    clearInterval(stallTimer);
-    activeRnbTasks.delete(id);
-    speedSampler.delete(id);
-
-    const t = tasks.get(id);
-    if (!t) { flushQueue(); return; }
-    if (t.status === 'cancelled' || t.status === 'paused') { flushQueue(); return; }
-
-    const msg: string = e?.message ?? String(e ?? '');
-    if (isTransientError(msg) && (t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
-      t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
-      const delay = retryDelay(t._autoRetryCount);
-      t.status = 'pending';
-      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
-      t.speed = 0; t.eta = -1;
-      // 每次重试都从头下（OkHttp3 无内置断点续传接口）
-      await cleanupTempDir(id);
-      t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
-      notify(t);
-      setTimeout(() => flushQueue(), delay);
-      return;
-    }
-
-    t.status = 'failed';
-    t.error = mapErrorMessage(msg);
-    notify(t);
-    await cleanupTempDir(id);
-    flushQueue();
+    task.status = 'failed';
+    task.error = '无法调起下载，请检查网络或手动复制链接';
   }
+  notify(task);
+  flushQueue();
 }
 
 /** iOS：expo-file-system (NSURLSession) + 断点续传 */
@@ -611,12 +489,6 @@ export async function pause(id: string): Promise<void> {
     session?.cancelAsync?.().catch(() => {});
     activeSessions.delete(id);
   }
-  // Android: RNBlobUtil task
-  const rnbTask = activeRnbTasks.get(id);
-  if (rnbTask) {
-    rnbTask.cancel?.();
-    activeRnbTasks.delete(id);
-  }
 
   task.status = 'paused';
   task.speed = 0;
@@ -643,12 +515,6 @@ export async function cancel(id: string): Promise<void> {
   if (session) {
     session?.cancelAsync?.().catch(() => {});
     activeSessions.delete(id);
-  }
-  // Android
-  const rnbTask = activeRnbTasks.get(id);
-  if (rnbTask) {
-    rnbTask.cancel?.();
-    activeRnbTasks.delete(id);
   }
 
   task.status = 'cancelled';
@@ -695,9 +561,6 @@ export async function pauseAll(): Promise<void> {
       // iOS
       const session = activeSessions.get(id);
       if (session) { session?.cancelAsync?.().catch(() => {}); activeSessions.delete(id); }
-      // Android
-      const rnbTask = activeRnbTasks.get(id);
-      if (rnbTask) { rnbTask.cancel?.(); activeRnbTasks.delete(id); }
       task.status = 'paused';
       task.speed = 0;
       task.eta = -1;
@@ -727,9 +590,6 @@ export function clearAllTasks(): void {
     // iOS
     const session = activeSessions.get(id);
     if (session) { session?.cancelAsync?.().catch(() => {}); activeSessions.delete(id); }
-    // Android
-    const rnbTask = activeRnbTasks.get(id);
-    if (rnbTask) { rnbTask.cancel?.(); activeRnbTasks.delete(id); }
     cleanupTempDir(id);
   }
   tasks.clear();
