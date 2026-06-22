@@ -259,15 +259,64 @@ async function startTask(id: string) {
   task.eta = -1;
   notify(task);
 
+  // ── 预解析 GitHub 重定向链，获取真实 CDN URL ──────────────────────────────
+  // GitHub browser_download_url 经过 1-2 次 302 跳转才到 S3/CDN，
+  // react-native-blob-util 内部跟随重定向有时不更新进度回调导致卡在 0%，
+  // 提前用 expo/fetch 拿到最终 URL 后再交给 rnbu 直接下载 CDN 地址。
+  let resolvedUrl = task.url;
+  if (task.url.includes('github.com')) {
+    try {
+      const headRes = await fetch(task.url, {
+        method: 'GET',
+        // 只要第一个响应头，立即 abort 后读 url 属性（已包含重定向后的地址）
+        redirect: 'follow',
+        headers: { 'User-Agent': 'OpenAppStore/1.0' },
+      });
+      // expo/fetch 的 Response.url 是最终 URL（跟随所有重定向后的地址）
+      if (headRes.url && headRes.url !== task.url) {
+        resolvedUrl = headRes.url;
+      }
+    } catch {
+      // 预解析失败则使用原 URL，不影响后续下载
+    }
+  }
+
   // react-native-blob-util 配置：下载到指定路径，带进度回调
   const session = ReactNativeBlobUtil.config({
     path: localUri,
     fileCache: false, // 不自动管理缓存，我们手动管理
-  }).fetch('GET', task.url, {
-    'Cache-Control': 'no-cache',
+    trusty: true,     // 信任 CDN 的 SSL 证书（对象存储 CDN 有时使用通配符证书）
+  }).fetch('GET', resolvedUrl, {
+    'User-Agent': 'OpenAppStore/1.0',
   });
 
   activeSessions.set(id, session);
+
+  // ── 卡顿检测：60s 内无字节增量则取消并自动重试 ────────────────────────────
+  let lastBytesForStall = 0;
+  const stallTimer = setInterval(() => {
+    const t = tasks.get(id);
+    if (!t || t.status !== 'downloading') { clearInterval(stallTimer); return; }
+    if (t.bytesWritten === lastBytesForStall) {
+      // 60s 无进度 → 取消并重试
+      clearInterval(stallTimer);
+      const sess = activeSessions.get(id);
+      if (sess) { sess.cancel?.(); activeSessions.delete(id); }
+      if ((t._autoRetryCount ?? 0) < MAX_AUTO_RETRY) {
+        t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
+        t.status = 'pending';
+        t.error = `下载无响应，自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+        t.progress = 0; t.speed = 0; t.eta = -1;
+      } else {
+        t.status = 'failed';
+        t.error = '下载超时，请检查网络后手动重试';
+      }
+      notify(t);
+      cleanupTempDir(id).then(() => flushQueue());
+    } else {
+      lastBytesForStall = t.bytesWritten;
+    }
+  }, 60_000);
 
   // 进度回调
   session.progress({ count: 10, interval: 250 }, (received: number, total: number) => {
@@ -306,6 +355,7 @@ async function startTask(id: string) {
   try {
     const res = await session;
 
+    clearInterval(stallTimer);
     activeSessions.delete(id);
     speedSampler.delete(id);
 
@@ -368,6 +418,7 @@ async function startTask(id: string) {
     notify(t);
     flushQueue();
   } catch (e: any) {
+    clearInterval(stallTimer);
     activeSessions.delete(id);
     speedSampler.delete(id);
 
