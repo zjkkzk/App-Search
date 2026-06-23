@@ -38,8 +38,8 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 /**
  * 打开 / 安装已下载的文件。
- * - 安装包：调起系统安装器（shareAsync 会路由到包安装器）
- * - 其他文件：调起系统推荐的打开应用
+ * - Android：文件在公共 Downloads 目录，使用 actionViewIntent 调起安装器
+ * - iOS：使用 expo-sharing 调起
  * 返回成功与否及错误描述。
  */
 async function openLocalFile(
@@ -50,14 +50,22 @@ async function openLocalFile(
   if (!localUri) return { ok: false, error: '文件路径无效' };
   try {
     const mimeType = getMimeType(filename);
-    // 动态导入，避免 web bundle 包含 expo-sharing
-    const Sharing = await import('expo-sharing');
-    const available = await Sharing.isAvailableAsync();
-    if (!available) return { ok: false, error: '当前设备不支持文件分享/打开' };
-    await Sharing.shareAsync(localUri, {
-      mimeType,
-      dialogTitle: isInstallerFile(filename) ? '安装应用' : '查看文件',
-    });
+    if (Platform.OS === 'android') {
+      const RNFB = await import('react-native-blob-util');
+      const filePath = localUri.replace('file://', '');
+      // 验证文件存在
+      const exists = await RNFB.default.fs.exists(filePath);
+      if (!exists) return { ok: false, error: '文件已被移动或删除' };
+      await RNFB.default.android.actionViewIntent(filePath, mimeType);
+    } else {
+      const Sharing = await import('expo-sharing');
+      const available = await Sharing.isAvailableAsync();
+      if (!available) return { ok: false, error: '当前设备不支持文件分享/打开' };
+      await Sharing.shareAsync(localUri, {
+        mimeType,
+        dialogTitle: isInstallerFile(filename) ? '安装应用' : '查看文件',
+      });
+    }
     return { ok: true };
   } catch (e: any) {
     const msg: string = e?.message ?? '';
@@ -97,9 +105,11 @@ export default function DownloadProgressButton({
       !autoInstallFiredRef.current
     ) {
       autoInstallFiredRef.current = true;
-      import('expo-file-system').then((fs) => {
-        fs.getInfoAsync(task.localUri!).then((info: any) => {
-          if (info.exists) {
+      // 文件在公共 Downloads 目录，使用 react-native-blob-util 验证文件存在
+      import('react-native-blob-util').then((RNFB) => {
+        const filePath = task.localUri!.replace('file://', '');
+        RNFB.default.fs.exists(filePath).then((exists: boolean) => {
+          if (exists) {
             openLocalFile(task.localUri!, filename).then(({ ok, error }) => {
               if (!ok && error) setOpenError(error);
             });

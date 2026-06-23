@@ -197,7 +197,17 @@ export default function DownloadsScreen() {
         const IL = await import('expo-intent-launcher');
         const FS = await import('expo-file-system/legacy');
         // file:// → content:// via FileProvider（Android 7+ 跨进程必须用 content://）
-        const contentUri = await FS.getContentUriAsync(item.localUri);
+        let contentUri: string;
+        try {
+          contentUri = await FS.getContentUriAsync(item.localUri);
+        } catch {
+          // 公共 Downloads 目录的文件可能无法通过 FileProvider 获取 content:// URI
+          // 退而使用 react-native-blob-util 的 actionViewIntent
+          const RNFB = await import('react-native-blob-util');
+          const filePath = item.localUri.replace('file://', '');
+          await RNFB.default.android.actionViewIntent(filePath, getMimeType(item.filename));
+          return;
+        }
         await IL.startActivityAsync('android.intent.action.VIEW', {
           data: contentUri,
           type: getMimeType(item.filename),
