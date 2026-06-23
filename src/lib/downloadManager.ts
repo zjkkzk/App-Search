@@ -118,9 +118,14 @@ type ProgressCallback = (task: DownloadTask | { id: typeof REFRESH_EVENT }) => v
 // ─── 全局状态 ─────────────────────────────────────────────────────────────────
 const tasks = new Map<string, DownloadTask>();
 const subscribers = new Set<ProgressCallback>();
-/** 活跃的 expo-file-system DownloadResumable（iOS 专用） */
+/** 活跃的 expo-file-system DownloadResumable */
 const activeSessions = new Map<string, _FileSystem.DownloadResumable>();
 const speedSampler = new Map<string, { ts: number; bytes: number }>();
+/**
+ * 正在"启动中"的任务 ID 集合（已调用 startTask 但 DownloadResumable 尚未建立）
+ * 用于防止 flushQueue 在 probeDownloadUrl 等异步初始化期间重复启动同一任务（BUG-A 修复）
+ */
+const launchingSet = new Set<string>();
 
 function genId(): string { return `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 function notify(task: DownloadTask) { subscribers.forEach((cb) => cb({ ...task })); }
@@ -129,7 +134,11 @@ function notifyRefresh() { subscribers.forEach((cb) => cb({ id: REFRESH_EVENT })
 function flushQueue() {
   const active = [...tasks.values()].filter((t) => t.status === 'downloading').length;
   if (active >= MAX_CONCURRENT) return;
-  const next = [...tasks.values()].find((t) => t.status === 'pending');
+  // launchingSet 中的任务已调用 startTask 但 DownloadResumable 尚未建立（正在做预检等异步初始化）
+  // 不计入 active count，但也不能重复启动（BUG-A 修复）
+  const next = [...tasks.values()].find(
+    (t) => t.status === 'pending' && !launchingSet.has(t.id),
+  );
   if (next) startTask(next.id);
 }
 
@@ -351,8 +360,20 @@ function applyProgress(id: string, bytesWritten: number, totalBytes: number) {
 async function startTaskNative(id: string) {
   const task = tasks.get(id);
   if (!task) return;
-  // 防重入：若该 id 已有活跃 session，说明 stall+catch 同时触发了双重启动，直接忽略
+  // 防重入①：activeSessions 已存在 → DownloadResumable 已建立，直接忽略
   if (activeSessions.has(id)) return;
+  // 防重入②：launchingSet 已登记 → 正在初始化中（probeDownloadUrl 等），直接忽略（BUG-A 修复）
+  if (launchingSet.has(id)) return;
+
+  // ── 立即将 status 设为 'downloading' 并加入 launchingSet ────────────────────
+  // 必须在任何 await 之前完成，确保 flushQueue 不会在异步初始化期间重复选中此任务
+  // 旧版在 probeDownloadUrl（最长 8s）之后才改 status，导致 flushQueue 反复重启同一下载
+  launchingSet.add(id);
+  task.status = 'downloading';
+  task.error = null;
+  task.speed = 0;
+  task.eta = -1;
+  notify(task);
 
   const fs = getFS()!;
   const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
@@ -365,8 +386,7 @@ async function startTaskNative(id: string) {
 
   await fs.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => null);
 
-  // ── 预检：获取文件大小（HEAD 请求，8s 超时，失败不阻断） ──────────────────
-  // 与 resumeData 加载并行执行，节省启动耗时
+  // ── 预检 + resumeData 加载（并行） ────────────────────────────────────────
   const [probeResult, resumeDataRaw] = await Promise.all([
     probeDownloadUrl(task.url),
     (async () => {
@@ -379,7 +399,7 @@ async function startTaskNative(id: string) {
           await AsyncStorage.removeItem(resumeKey).catch(() => null);
           return null;
         }
-        return saved; // 临时文件存在才使用 resumeData
+        return saved;
       } catch { return null; }
     })(),
   ]);
@@ -411,15 +431,12 @@ async function startTaskNative(id: string) {
     await AsyncStorage.removeItem(resumeKey).catch(() => null);
   }
 
-  task.status = 'downloading';
-  task.error = null;
+  // 进度/字节数重置（resumeData 存在时保留已有进度）
   if (!resumeData) {
-    // iOS 续传时保留已有进度；其他情况重置
     task.progress = IS_IOS ? task.progress : 0;
     task.bytesWritten = IS_IOS ? task.bytesWritten : 0;
-    if (!resumeData && !IS_IOS) task.totalBytes = probeResult.contentLength || 0;
+    if (!IS_IOS) task.totalBytes = probeResult.contentLength || 0;
   }
-  task.speed = 0; task.eta = -1;
   notify(task);
 
   let resumableRef: _FileSystem.DownloadResumable | null = null;
@@ -463,6 +480,7 @@ async function startTaskNative(id: string) {
   let lastSaveTs = 0;
   let lastAndroidSaveTs = 0;
   activeSessions.set(id, resumable);
+  launchingSet.delete(id); // DownloadResumable 已建立，移出启动集合
 
   // ── 卡顿检测：STALL_INTERVAL_MS（30s）无新字节 → 取消并重试 ─────────────
   // lastStallBytes 初始化为当前已写字节数（而非 0），避免首轮必过、掩盖即时卡顿
@@ -470,6 +488,15 @@ async function startTaskNative(id: string) {
   const stallTimer = setInterval(() => {
     const t = tasks.get(id);
     if (!t || t.status !== 'downloading') { clearInterval(stallTimer); return; }
+
+    // BUG-B 修复：文件写入最后阶段进度回调可能停止，但下载实际已完成
+    // 当 bytesWritten 已达 totalBytes 的 99.9% 以上时，视为"即将完成"，跳过卡顿中断
+    // 避免误杀最后字节 → 导致重新从头下载
+    if (t.totalBytes > 0 && t.bytesWritten >= t.totalBytes * 0.999) {
+      clearInterval(stallTimer);
+      return;
+    }
+
     if (t.bytesWritten === lastStallBytes) {
       clearInterval(stallTimer);
       // iOS：保存断点以便下次续传
@@ -506,6 +533,7 @@ async function startTaskNative(id: string) {
     const result = await resumable.downloadAsync();
     clearInterval(stallTimer);
     activeSessions.delete(id);
+    launchingSet.delete(id);
     speedSampler.delete(id);
     resumableRef = null;
     // 下载完成，清除两种续传缓存
@@ -555,6 +583,7 @@ async function startTaskNative(id: string) {
   } catch (e: any) {
     clearInterval(stallTimer);
     activeSessions.delete(id);
+    launchingSet.delete(id);
     speedSampler.delete(id);
     resumableRef = null;
 
@@ -679,12 +708,22 @@ export async function pause(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task || task.status !== 'downloading') return;
 
-  // iOS: expo-file-system session
   const session = activeSessions.get(id);
   if (session) {
-    session?.cancelAsync?.().catch(() => {});
+    // BUG-C 修复：iOS 暂停时先保存断点，再取消 session，否则 resumeData 丢失
+    if (IS_IOS) {
+      try {
+        const state = session.savable();
+        const resumeKey = `${RESUME_KEY_PREFIX}${urlStableKey(task.url)}`;
+        if (state.resumeData) {
+          await AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
+        }
+      } catch { /* ignore */ }
+    }
+    session.cancelAsync?.().catch(() => {});
     activeSessions.delete(id);
   }
+  launchingSet.delete(id);
 
   task.status = 'paused';
   task.speed = 0;
@@ -706,12 +745,12 @@ export async function cancel(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task) return;
 
-  // iOS
   const session = activeSessions.get(id);
   if (session) {
     session?.cancelAsync?.().catch(() => {});
     activeSessions.delete(id);
   }
+  launchingSet.delete(id);
 
   task.status = 'cancelled';
   speedSampler.delete(id);
@@ -763,9 +802,22 @@ export function clearFinished(): void {
 export async function pauseAll(): Promise<void> {
   for (const [id, task] of tasks) {
     if (task.status === 'downloading' || task.status === 'pending') {
-      // iOS
       const session = activeSessions.get(id);
-      if (session) { session?.cancelAsync?.().catch(() => {}); activeSessions.delete(id); }
+      if (session) {
+        // BUG-C 修复：批量暂停时同样保存 iOS 断点
+        if (IS_IOS) {
+          try {
+            const state = session.savable();
+            const resumeKey = `${RESUME_KEY_PREFIX}${urlStableKey(task.url)}`;
+            if (state.resumeData) {
+              AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
+            }
+          } catch { /* ignore */ }
+        }
+        session.cancelAsync?.().catch(() => {});
+        activeSessions.delete(id);
+      }
+      launchingSet.delete(id);
       task.status = 'paused';
       task.speed = 0;
       task.eta = -1;
@@ -788,9 +840,9 @@ export function resumeAll(): void {
 
 export function clearAllTasks(): void {
   for (const [id] of tasks.entries()) {
-    // iOS
     const session = activeSessions.get(id);
     if (session) { session?.cancelAsync?.().catch(() => {}); activeSessions.delete(id); }
+    launchingSet.delete(id);
     cleanupTempDir(id);
   }
   tasks.clear();
