@@ -139,6 +139,43 @@ function flushQueue() {
   if (next) startTask(next.id);
 }
 
+/**
+ * 预解析重定向，返回最终落地 URL（仅 Android）。
+ *
+ * 原理：
+ *   GitHub browser_download_url 是 302 重定向，真实文件在 objects.githubusercontent.com。
+ *   expo-file-system 底层 OkHttp HTTP/2 跟随跨域重定向时，服务端发 RST_STREAM CANCEL
+ *   正常关闭旧流，OkHttp 将其作为异常抛出（"stream was reset: CANCEL"）。
+ *
+ * 解法：
+ *   用 XMLHttpRequest 发送一个普通 GET，在 readyState=2（HEADERS_RECEIVED）时
+ *   读取 responseURL（已是跳转后的最终 CDN 地址），立即 abort，不下载任何内容。
+ *   将拿到的直链传给 createDownloadResumable，完全绕过重定向，无 RST_STREAM。
+ *
+ * 为何不用 fetch().url：
+ *   React Native 的 fetch 底层同样使用 OkHttp；在某些 Android 版本上
+ *   response.url 返回的仍是原始 URL，并不可靠。
+ *   XHR.responseURL 是 W3C 标准属性，Android WebKit/OkHttp 均正确实现。
+ */
+async function resolveRedirect(url: string): Promise<string> {
+  if (!IS_ANDROID) return url;
+  return new Promise<string>((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.timeout = 5_000;
+    xhr.onreadystatechange = function () {
+      if (this.readyState >= 2) { // HEADERS_RECEIVED：重定向已跟随，responseURL 为最终地址
+        const finalUrl: string = (this as any).responseURL ?? '';
+        xhr.abort();
+        resolve(finalUrl && finalUrl !== url ? finalUrl : url);
+      }
+    };
+    xhr.ontimeout = () => resolve(url);
+    xhr.onerror   = () => resolve(url);
+    xhr.send();
+  });
+}
+
 function mapErrorMessage(msg: string): string {
   if (!msg) return '下载失败，请重试';
   if (msg.includes('Network request failed') || msg.includes('Unable to resolve host'))
@@ -280,29 +317,12 @@ async function startTaskNative(id: string) {
   task.eta = -1;
   notify(task);
 
-  // ── Android：完全交给系统下载器 ──────────────────────────────────────────────
-  // 根因：expo-file-system (OkHttp HTTP/2) 在跟随 GitHub 302 重定向时持续抛出
-  // "stream was reset: CANCEL"，是 OkHttp 层已知的 HTTP/2 跨域重定向行为差异。
-  // 彻底解法：Linking.openURL 将 URL 交给系统浏览器/DownloadManager，
-  // 系统引擎原生处理重定向、SSL、断点续传，下载进度显示在通知栏。
-  if (IS_ANDROID) {
-    launchingSet.delete(id);
-    try {
-      await Linking.openURL(task.url);
-      task.status = 'completed';
-      task.progress = 1;
-      task.localUri = BROWSER_DOWNLOAD_MARKER; // 文件由系统 Downloads 托管
-      task.error = null;
-    } catch (e: any) {
-      task.status = 'failed';
-      task.error = '无法调起系统下载，请检查网络或手动复制链接';
-    }
-    notify(task);
-    flushQueue();
-    return;
-  }
+  // ── Android / iOS：expo-file-system (OkHttp / NSURLSession) ─────────────────
+  // Android：先用 XHR 预解析 GitHub 302 重定向，拿到 objects.githubusercontent.com 直链，
+  //          再传给 createDownloadResumable，彻底绕过 OkHttp HTTP/2 RST_STREAM CANCEL。
+  // iOS：NSURLSession 能正确跟随重定向，resolveRedirect 对 iOS 直接返回原始 URL。
+  const downloadUrl = await resolveRedirect(task.url);
 
-  // ── iOS / 其他平台：expo-file-system (NSURLSession) ──────────────────────────
   const fs = getFS()!;
   const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
   const localUri = `${tempDir}${task.filename}`;
@@ -337,7 +357,7 @@ async function startTaskNative(id: string) {
   let resumableRef: _FileSystem.DownloadResumable | null = null;
 
   const resumable = fs.createDownloadResumable(
-    task.url,
+    downloadUrl,
     localUri,
     { headers: { 'User-Agent': 'OpenAppStore/1.0' } },
     (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
