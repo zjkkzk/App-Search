@@ -129,6 +129,46 @@ function flushQueue() {
   if (next) startTask(next.id);
 }
 
+/**
+ * 预解析重定向 URL，返回最终直链（通常是 objects.githubusercontent.com CDN 地址）
+ *
+ * 背景：GitHub 的 browser_download_url 形如
+ *   https://github.com/owner/repo/releases/download/v1.0/app.apk
+ * 这是一个 302 重定向，真实文件在 objects.githubusercontent.com。
+ *
+ * OkHttp（Android HTTP/2）在跟随跨域重定向时，会收到服务端发来的
+ * RST_STREAM CANCEL 关闭旧流，并将其作为异常抛出（"stream was reset: CANCEL"），
+ * 导致 createDownloadResumable 下载失败。
+ *
+ * 解法：下载前用 fetch（JS 层，自动跟随重定向）解析出最终 URL，
+ * 将直链传给 createDownloadResumable，完全绕过 OkHttp HTTP/2 重定向问题。
+ *
+ * - 仅 Android 需要此处理（iOS NSURLSession 能正确跟随重定向）
+ * - 解析失败时静默返回原始 URL，不阻断下载
+ * - 3s 超时，避免弱网下长时间阻塞
+ */
+async function resolveRedirect(url: string): Promise<string> {
+  if (!IS_ANDROID) return url;
+  // 非 GitHub release 链接无需解析
+  if (!url.includes('github.com') && !url.includes('api.github.com')) return url;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3_000);
+    // redirect: 'follow' 让 fetch 自动跟随所有跳转，response.url 即最终落地地址
+    const res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      headers: { 'User-Agent': 'OpenAppStore/1.0' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const finalUrl = res.url;
+    return finalUrl && finalUrl !== url ? finalUrl : url;
+  } catch {
+    return url; // 解析失败，使用原始 URL
+  }
+}
+
 function mapErrorMessage(msg: string): string {
   if (!msg) return '下载失败，请重试';
   if (msg.includes('Network request failed') || msg.includes('Unable to resolve host'))
@@ -301,10 +341,14 @@ async function startTaskNative(id: string) {
     notify(task);
   }
 
+  // Android：预解析 GitHub 302 重定向，拿到 objects.githubusercontent.com 直链
+  // 避免 OkHttp HTTP/2 把 RST_STREAM CANCEL（正常关闭旧流）当下载错误抛出
+  const downloadUrl = await resolveRedirect(task.url);
+
   let resumableRef: _FileSystem.DownloadResumable | null = null;
 
   const resumable = fs.createDownloadResumable(
-    task.url,
+    downloadUrl,
     localUri,
     { headers: { 'User-Agent': 'OpenAppStore/1.0' } },
     (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
