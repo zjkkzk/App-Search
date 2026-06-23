@@ -203,33 +203,44 @@ export default function DownloadProgressButton({
 
     const percent   = Math.round(progress * 100);
     const speedStr  = formatSpeed(task.speed);
+    // 断点续传状态：pending 且已有历史进度（iOS 跨会话恢复 / 弱网重试）
+    const hasResume = isPending && task.bytesWritten > 0 && progress > 0;
     return (
       <Pressable onPress={handlePress} style={{ alignItems: 'center', gap: 4, minWidth: 60 }}>
         <View style={{ position: 'relative', width: 44, height: 44 }}>
           <Svg width={44} height={44} viewBox="0 0 44 44">
             <Circle cx={22} cy={22} r={18} stroke="#E5E5E5" strokeWidth={3} fill="none" />
-            {!isPending && (
+            {/* pending 且有断点进度时也绘制圆弧，直观展示已下载量 */}
+            {(!isPending || hasResume) && (
               <Circle
                 cx={22} cy={22} r={18}
                 stroke={accentColor} strokeWidth={3} fill="none"
                 strokeDasharray={`${2 * Math.PI * 18} ${2 * Math.PI * 18}`}
-                strokeDashoffset={(2 * Math.PI * 18) * (1 - progress)}
+                strokeDashoffset={(2 * Math.PI * 18) * (1 - (hasResume ? progress : progress))}
                 strokeLinecap="round" rotation={-90} origin="22,22"
               />
             )}
           </Svg>
           <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-            {isPending
+            {isPending && !hasResume
               ? <Ionicons name="hourglass-outline" size={16} color="#AAAAAA" />
-              : <Ionicons name={isPaused ? 'play' : 'pause'} size={15} color={accentColor} />}
+              : <Ionicons name={isPaused ? 'play' : isPending ? 'refresh' : 'pause'} size={15} color={accentColor} />}
           </View>
         </View>
         <Text style={{ fontSize: 11, color: accentColor, fontWeight: '600' }}>
-          {isPending ? '等待中' : isPaused ? `${percent}% 已暂停` : `${percent}%`}
+          {isPending
+            ? (hasResume ? `${percent}% 续传` : '等待中')
+            : isPaused ? `${percent}% 已暂停` : `${percent}%`}
         </Text>
-        {speedStr && !isPaused
+        {speedStr && !isPaused && !isPending
           ? <Text style={{ fontSize: 10, color: '#999999' }}>{speedStr}</Text>
           : null}
+        {/* 弱网重试时展示重试次数 */}
+        {task.error && isPending && (
+          <Text numberOfLines={1} style={{ fontSize: 9, color: '#AAAAAA', maxWidth: 80, textAlign: 'center' }}>
+            {task.error}
+          </Text>
+        )}
       </Pressable>
     );
   }

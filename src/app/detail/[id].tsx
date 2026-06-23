@@ -470,9 +470,10 @@ export default function DetailScreen() {
                             <Pressable
                               onPress={async () => {
                                 if (!app) return;
-                                // 检查是否已在下载队列
+                                // 检查是否已在下载队列或已完成
                                 const existing = findByUrl(asset.browser_download_url);
-                                if (existing && (existing.status === 'downloading' || existing.status === 'pending')) {
+                                if (existing && existing.status !== 'failed' && existing.status !== 'cancelled') {
+                                  // 进行中 / 已完成 / 已暂停 → 跳转下载页查看，不重复入队
                                   router.push('/downloads' as any);
                                   return;
                                 }

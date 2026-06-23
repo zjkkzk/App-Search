@@ -1,5 +1,5 @@
 /**
- * 下载管理器 v22 — 全面质检修复版
+ * 下载管理器 v23 — 断点续传 + 弱网优化
  *
  * 引擎：
  *  - Android/iOS : expo-file-system createDownloadResumable（应用内下载，进度可追踪）
@@ -12,16 +12,25 @@
  *  - Android 通过 FileProvider getContentUriAsync 暴露给安装器
  *  - iOS 通过 shareAsync 暴露给安装器
  *
- * 重试策略：
- *  - 最多自动重试 5 次，指数退避（2s/4s/8s…30s）
- *  - 瞬态错误（断网/超时/RST_STREAM/Download interrupted）自动恢复
- *  - iOS：保留 resumeData，字节级续传；Android：重头下载
+ * 断点续传：
+ *  - iOS：NSURLSessionDownloadTask 字节级续传，resumeData 以 URL 为 key 持久化
+ *         → 跨会话（App 重启后）可从断点恢复
+ *  - Android：保存已下载字节数至 AsyncStorage（key = URL hash），重试时展示已缓存进度
+ *             注：expo-file-system 在 Android 上不支持字节级续传（OkHttp 不保留分段文件）
  *
- * v22 修复点：
- *  1. downloadAsync() 返回 null（stall 取消）时未检查 status，覆盖 stall 的 pending → failed
- *  2. stall 处理器未清理 speedSampler → 续传后速度计算异常
- *  3. Android 上传入 resumeData 可能导致 downloadAsync 行为异常 → iOS 专用
- *  4. stallTimer lastStallBytes 初始化为 0 → 首轮必过，掩盖即时卡顿 → 改为 task.bytesWritten
+ * 预检（HEAD 请求）：
+ *  - 下载前发 HEAD 获取 Content-Length（提前展示文件大小）
+ *  - 检测服务器是否支持 Range，为将来原生模块集成做标记
+ *
+ * 弱网优化：
+ *  - 卡顿检测 30s（↓ 旧版 60s）
+ *  - 最大自动重试 8 次（↑ 旧版 5 次）
+ *  - 指数退避 + ±30% 随机抖动（避免雷群效应）
+ *  - isTransientError 扩展覆盖更多弱网错误码
+ *
+ * v23 修复点（延续 v22）：
+ *  5. enqueue 对 completed 任务执行 delete+create → 意外重新下载 → 改为直接返回 existing.id
+ *  6. 断点续传 key 从 task ID 改为 URL hash → 跨会话可恢复 iOS 续传数据
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -32,9 +41,10 @@ const IS_ANDROID = Platform.OS === 'android';
 const IS_IOS = Platform.OS === 'ios';
 const MAX_CONCURRENT = 3;
 const PERM_DIR_NAME = 'dl_perm';
-const MAX_AUTO_RETRY = 5;
-const STALL_INTERVAL_MS = 60_000; // 无进度超时触发重试
+const MAX_AUTO_RETRY = 8;          // 弱网下更多重试机会（旧版 5 次）
+const STALL_INTERVAL_MS = 30_000;  // 卡顿检测缩短至 30s（旧版 60s），弱网更快响应
 const RESUME_KEY_PREFIX = '@openappstore/resume_';
+const PARTIAL_KEY_PREFIX = '@openappstore/partial_'; // Android 已下载字节数缓存
 const SAF_PERM_KEY = '@openappstore/saf_downloads_uri';
 
 function getFS(): typeof _FileSystem | null {
@@ -143,17 +153,73 @@ function isTransientError(msg: string): boolean {
     msg.includes('IOException') ||
     msg.includes('read timed out') ||
     msg.includes('connection timed out') ||
+    // 弱网扩展：SSL 握手失败、链路重置、管道错误（4G/WiFi 切换时高发）
+    msg.includes('SSLException') ||
+    msg.includes('SSLHandshakeException') ||
+    msg.includes('handshake') ||
+    msg.includes('Broken pipe') ||
+    msg.includes('EPIPE') ||
+    msg.includes('Software caused connection abort') ||
+    msg.includes('Connection reset by peer') ||
+    msg.includes('No route to host') ||
+    msg.includes('EHOSTUNREACH') ||
+    msg.includes('ENETUNREACH') ||
+    msg.includes('Network is unreachable') ||
+    msg.includes('Host is unreachable') ||
     // GitHub CDN 限速/过载（临时）
     msg.includes('503') ||
     msg.includes('429') ||
     msg.includes('Too Many Requests') ||
-    msg.includes('Service Unavailable')
+    msg.includes('Service Unavailable') ||
+    // 弱网扩展：502/504 网关超时（CDN 边缘节点过载）
+    msg.includes('502') ||
+    msg.includes('504') ||
+    msg.includes('Bad Gateway') ||
+    msg.includes('Gateway Timeout')
   );
 }
 
-/** 计算第 n 次重试的退避延迟（指数退避，上限 30s） */
+/**
+ * 计算第 n 次重试的退避延迟（指数退避 + ±30% 随机抖动，上限 30s）
+ * 抖动避免多任务同时重试时的"雷群效应"
+ */
 function retryDelay(retryCount: number): number {
-  return Math.min(30_000, 1_000 * (2 ** retryCount));
+  const base = Math.min(30_000, 1_000 * (2 ** retryCount));
+  const jitter = Math.floor(Math.random() * base * 0.3);
+  return base + jitter;
+}
+
+/**
+ * 下载预检：发送 HEAD 请求获取文件大小和 Range 支持情况
+ * - 用于下载开始前预填 totalBytes，让进度条从 0% 起就能显示文件大小
+ * - 检测服务器是否支持 Accept-Ranges: bytes（为 Android 断点续传做标记）
+ * - 任何失败均静默忽略，不阻断下载流程
+ */
+async function probeDownloadUrl(url: string): Promise<{ contentLength: number; acceptsRange: boolean }> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8_000); // 8s 超时，避免阻塞下载启动
+    const res = await fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'OpenAppStore/1.0' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const contentLength = parseInt(res.headers.get('content-length') ?? '0', 10) || 0;
+    const acceptsRange = (res.headers.get('accept-ranges') ?? '').toLowerCase() === 'bytes';
+    return { contentLength, acceptsRange };
+  } catch {
+    return { contentLength: 0, acceptsRange: false };
+  }
+}
+
+/**
+ * 将 URL 映射为稳定的 AsyncStorage key 后缀（不依赖 task ID）
+ * 用于 iOS resumeData 跨会话持久化：App 重启后新 task 可通过 URL 找到旧 resumeData
+ */
+function urlStableKey(url: string): string {
+  // 取 URL 末尾 100 字符并替换非法字符，保证唯一性同时控制 key 长度
+  return url.replace(/[^a-zA-Z0-9]/g, '_').slice(-100);
 }
 
 function mapErrorMessage(msg: string): string {
@@ -272,11 +338,15 @@ function applyProgress(id: string, bytesWritten: number, totalBytes: number) {
 /**
  * 应用内下载（Android + iOS 统一）
  *
- * - 使用 expo-file-system createDownloadResumable
- * - iOS 保留 resumeData 实现字节级续传；Android 暂停后重头下
- * - 完成后移入 dl_perm/ 持久目录：
- *     Android → getContentUriAsync → 安装器 intent
- *     iOS     → shareAsync → 安装器
+ * 断点续传策略：
+ *  - iOS：resumeData 以 URL 为 key 存入 AsyncStorage
+ *         → 跨会话恢复：App 重启后重新入队同 URL，可从上次断点继续
+ *  - Android：expo-file-system 不支持字节级续传
+ *             下载前保存 { bytesWritten, totalBytes } 到 AsyncStorage（key = URL hash）
+ *             重试时读取并预填进度条，提升弱网下的体验感知
+ *
+ * 预检：
+ *  - 下载前发 HEAD 请求获取 Content-Length，让进度条从第一帧就能展示文件大小
  */
 async function startTaskNative(id: string) {
   const task = tasks.get(id);
@@ -287,30 +357,68 @@ async function startTaskNative(id: string) {
   const fs = getFS()!;
   const tempDir = `${fs.documentDirectory ?? ''}dl_${id}/`;
   const localUri = `${tempDir}${task.filename}`;
-  // iOS 支持字节级续传；Android 暂停后重头下，resumeKey 仍写入以保持接口一致
-  const resumeKey = `${RESUME_KEY_PREFIX}${id}`;
+
+  // resumeData key 以 URL 为索引（而非 task ID），确保 App 重启后仍可找到旧续传数据
+  const resumeKey = `${RESUME_KEY_PREFIX}${urlStableKey(task.url)}`;
+  // Android：已下载字节数缓存 key（用于展示进度，不用于真正续传）
+  const partialKey = `${PARTIAL_KEY_PREFIX}${urlStableKey(task.url)}`;
 
   await fs.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => null);
 
-  // 加载断点续传数据（仅 iOS 有字节级续传能力；Android 提供 resumeData 可能导致 downloadAsync 异常）
-  let resumeData: string | undefined;
-  if (IS_IOS) {
-    try {
-      const saved = await AsyncStorage.getItem(resumeKey);
-      if (saved) {
+  // ── 预检：获取文件大小（HEAD 请求，8s 超时，失败不阻断） ──────────────────
+  // 与 resumeData 加载并行执行，节省启动耗时
+  const [probeResult, resumeDataRaw] = await Promise.all([
+    probeDownloadUrl(task.url),
+    (async () => {
+      if (!IS_IOS) return null;
+      try {
+        const saved = await AsyncStorage.getItem(resumeKey);
+        if (!saved) return null;
         const info = await fs.getInfoAsync(localUri).catch(() => ({ exists: false }));
-        resumeData = info.exists ? saved : undefined;
-        if (!info.exists) await AsyncStorage.removeItem(resumeKey).catch(() => null);
+        if (!info.exists) {
+          await AsyncStorage.removeItem(resumeKey).catch(() => null);
+          return null;
+        }
+        return saved; // 临时文件存在才使用 resumeData
+      } catch { return null; }
+    })(),
+  ]);
+
+  // 预填 totalBytes（若 HEAD 成功）
+  if (probeResult.contentLength > 0 && task.totalBytes === 0) {
+    task.totalBytes = probeResult.contentLength;
+  }
+
+  // Android：读取上次下载的进度并预填（仅展示，不影响真实下载）
+  if (IS_ANDROID && task.bytesWritten === 0) {
+    try {
+      const saved = await AsyncStorage.getItem(partialKey);
+      if (saved) {
+        const { bytesWritten: bw, totalBytes: tb } = JSON.parse(saved);
+        if (typeof bw === 'number' && bw > 0) {
+          task.bytesWritten = bw;
+          if (typeof tb === 'number' && tb > task.totalBytes) task.totalBytes = tb;
+          task.progress = task.totalBytes > 0 ? bw / task.totalBytes : -1;
+        }
       }
     } catch { /* ignore */ }
-  } else {
-    // Android 不用 resumeData，清除可能残留的旧数据
+  }
+
+  const resumeData: string | undefined = resumeDataRaw ?? undefined;
+
+  // Android 不用 resumeData，清除可能残留的旧数据
+  if (IS_ANDROID) {
     await AsyncStorage.removeItem(resumeKey).catch(() => null);
   }
 
   task.status = 'downloading';
   task.error = null;
-  if (!resumeData) { task.progress = 0; task.bytesWritten = 0; task.totalBytes = 0; }
+  if (!resumeData) {
+    // iOS 续传时保留已有进度；其他情况重置
+    task.progress = IS_IOS ? task.progress : 0;
+    task.bytesWritten = IS_IOS ? task.bytesWritten : 0;
+    if (!resumeData && !IS_IOS) task.totalBytes = probeResult.contentLength || 0;
+  }
   task.speed = 0; task.eta = -1;
   notify(task);
 
@@ -321,24 +429,42 @@ async function startTaskNative(id: string) {
     { headers: { 'User-Agent': 'OpenAppStore/1.0' } },
     (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
       applyProgress(id, dp.totalBytesWritten, dp.totalBytesExpectedToWrite);
-      // 首次有进度立即保存断点，之后每 3s 保存一次
-      const now = Date.now();
-      const isFirst = lastSaveTs === 0 && dp.totalBytesWritten > 0;
-      if ((isFirst || now - lastSaveTs > 3000) && resumableRef) {
-        lastSaveTs = now;
-        try {
-          const state = resumableRef.savable();
-          if (state.resumeData) AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
-        } catch { /* ignore */ }
+
+      // iOS：首次有进度立即保存断点，之后每 3s 保存一次（key = URL hash）
+      if (IS_IOS) {
+        const now = Date.now();
+        const isFirst = lastSaveTs === 0 && dp.totalBytesWritten > 0;
+        if ((isFirst || now - lastSaveTs > 3_000) && resumableRef) {
+          lastSaveTs = now;
+          try {
+            const state = resumableRef.savable();
+            if (state.resumeData) {
+              AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Android：每 5s 保存已下载字节数（供重启后展示）
+      if (IS_ANDROID) {
+        const now = Date.now();
+        if (now - lastAndroidSaveTs > 5_000 && dp.totalBytesWritten > 0) {
+          lastAndroidSaveTs = now;
+          AsyncStorage.setItem(partialKey, JSON.stringify({
+            bytesWritten: dp.totalBytesWritten,
+            totalBytes: dp.totalBytesExpectedToWrite,
+          })).catch(() => null);
+        }
       }
     },
     resumeData ? JSON.parse(resumeData) : undefined,
   );
   resumableRef = resumable;
   let lastSaveTs = 0;
+  let lastAndroidSaveTs = 0;
   activeSessions.set(id, resumable);
 
-  // 卡顿检测：STALL_INTERVAL_MS 无新字节 → 取消并重试
+  // ── 卡顿检测：STALL_INTERVAL_MS（30s）无新字节 → 取消并重试 ─────────────
   // lastStallBytes 初始化为当前已写字节数（而非 0），避免首轮必过、掩盖即时卡顿
   let lastStallBytes = task.bytesWritten;
   const stallTimer = setInterval(() => {
@@ -350,7 +476,9 @@ async function startTaskNative(id: string) {
       if (IS_IOS) {
         try {
           const state = resumableRef?.savable();
-          if (state?.resumeData) AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
+          if (state?.resumeData) {
+            AsyncStorage.setItem(resumeKey, JSON.stringify(state.resumeData)).catch(() => null);
+          }
         } catch { /* ignore */ }
       }
       activeSessions.get(id)?.cancelAsync?.().catch(() => {});
@@ -366,7 +494,7 @@ async function startTaskNative(id: string) {
       } else {
         t.status = 'failed';
         t.error = '下载超时，请检查网络后手动重试';
-        AsyncStorage.removeItem(resumeKey).catch(() => null);
+        if (!IS_IOS) AsyncStorage.removeItem(resumeKey).catch(() => null);
         cleanupTempDir(id);
         notify(t);
         flushQueue();
@@ -380,7 +508,11 @@ async function startTaskNative(id: string) {
     activeSessions.delete(id);
     speedSampler.delete(id);
     resumableRef = null;
-    await AsyncStorage.removeItem(resumeKey).catch(() => null);
+    // 下载完成，清除两种续传缓存
+    await Promise.all([
+      AsyncStorage.removeItem(resumeKey).catch(() => null),
+      AsyncStorage.removeItem(partialKey).catch(() => null),
+    ]);
 
     const t = tasks.get(id);
     if (!t) return;
@@ -436,15 +568,15 @@ async function startTaskNative(id: string) {
       t._autoRetryCount = (t._autoRetryCount ?? 0) + 1;
       const delay = retryDelay(t._autoRetryCount);
       t.status = 'pending';
-      t.error = `网络波动，${delay >= 1000 ? `${delay / 1000}s 后` : ''}自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
+      t.error = `网络波动，${delay >= 1000 ? `${Math.round(delay / 1000)}s 后` : ''}自动重试 (${t._autoRetryCount}/${MAX_AUTO_RETRY})...`;
       t.speed = 0; t.eta = -1;
       notify(t);
-      // RST_STREAM 类错误清除 resumeData，从头下
+      // RST_STREAM 类错误清除 resumeData，从头下（连接被服务端强制重置，续传数据无效）
       const isReset = msg.includes('stream was reset') || msg.includes('CANCEL') || msg.includes('RST_STREAM');
       if (isReset) {
         await AsyncStorage.removeItem(resumeKey).catch(() => null);
         await cleanupTempDir(id);
-        t.bytesWritten = 0; t.totalBytes = 0; t.progress = 0;
+        t.bytesWritten = 0; t.totalBytes = probeResult.contentLength || 0; t.progress = 0;
       }
       setTimeout(() => flushQueue(), delay);
       return;
@@ -499,10 +631,13 @@ export function enqueue(params: {
     throw new Error('下载链接无效');
   }
   const existing = findTaskByUrl(params.url);
-  if (existing && ['pending', 'downloading', 'paused'].includes(existing.status)) {
+  // 已存在且非终态（进行中/已完成）→ 直接返回，不重复下载
+  // fix(v23): 旧版将 completed 纳入删除+重建逻辑，导致完成后被意外重新下载
+  if (existing && ['pending', 'downloading', 'paused', 'completed'].includes(existing.status)) {
     return existing.id;
   }
-  if (existing && ['completed', 'failed'].includes(existing.status)) {
+  // 仅 failed/cancelled 才允许重建（相当于重试）
+  if (existing) {
     tasks.delete(existing.id);
   }
 
