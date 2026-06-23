@@ -76,7 +76,6 @@ export default function SearchTab() {
   useAndroidExitBack();
 
   const inputRef = useRef<TextInput>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const searchIdRef = useRef(0);
   const loadingRef = useRef(false);
@@ -206,15 +205,9 @@ export default function SearchTab() {
     }
   }, [filters, loadHistory, loadHotWords]);
 
-  // ── 防抖输入 ────────────────────────────────────────────────────────────────
+  // ── 输入变化：只更新输入值，不触发搜索 ─────────────────────────────────────
   const handleInputChange = (text: string) => {
     setInputValue(text);
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    if (text.trim().length >= 2) {
-      debounceTimer.current = setTimeout(() => {
-        performSearch(text);
-      }, 300);
-    }
   };
 
   const handleLoadMore = () => {
@@ -224,7 +217,6 @@ export default function SearchTab() {
   };
 
   const handleCancel = () => {
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
     if (abortRef.current) abortRef.current.abort();
     searchIdRef.current++;
     setInputValue('');
@@ -289,7 +281,6 @@ export default function SearchTab() {
             value={inputValue}
             onChangeText={handleInputChange}
             onSubmitEditing={(e) => {
-              if (debounceTimer.current) clearTimeout(debounceTimer.current);
               performSearch(e.nativeEvent.text || inputValue);
             }}
             returnKeyType="search"
