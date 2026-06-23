@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking, Platform, useWindowDimensions } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import AppIcon from '@/components/openappstore/AppIcon';
 import PlatformTag from '@/components/openappstore/PlatformTag';
 import { useDownload } from '@/ctx/DownloadContext';
 import { useTranslation } from '@/ctx/TranslationContext';
+import MarkdownSection from './MarkdownSection';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -24,155 +25,6 @@ function formatCount(n: number) {
   return String(n);
 }
 
-// ─── README 渲染：Native 用 WebView，Web 用 dangerouslySetInnerHTML ─────────────
-// react-native-webview 不支持 web 平台，使用 lazy import() 避免模块解析失败
-// import() 是真正的异步动态导入，Metro 不会在 web 打包时尝试解析 native 模块
-
-const README_CSS = `
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1F2328; padding: 0; margin: 0; word-wrap: break-word; overflow-wrap: break-word; }
-  h1 { font-size: 1.8em; border-bottom: 1px solid #d8dee4; padding-bottom: .3em; margin: 24px 0 16px; }
-  h2 { font-size: 1.4em; border-bottom: 1px solid #d8dee4; padding-bottom: .3em; margin: 24px 0 16px; }
-  h3 { font-size: 1.15em; margin: 24px 0 16px; }
-  h4 { font-size: 1em; margin: 24px 0 16px; }
-  p { margin: 0 0 12px; }
-  a { color: #0969da; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  img { max-width: 100%; height: auto; }
-  code { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; font-size: 85%; background: rgba(175,184,193,0.2); border-radius: 3px; padding: 2px 4px; }
-  pre { background: #f6f8fa; border-radius: 6px; padding: 12px; overflow-x: auto; }
-  pre code { background: none; padding: 0; font-size: 85%; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0; display: block; overflow-x: auto; }
-  th, td { border: 1px solid #d8dee4; padding: 6px 10px; text-align: left; }
-  th { background: #f6f8fa; font-weight: 600; }
-  tr:nth-child(even) { background: #f8f9fa; }
-  blockquote { border-left: 4px solid #d8dee4; margin: 0 0 12px; padding: 0 12px; color: #656d76; }
-  ul, ol { padding-left: 24px; margin: 0 0 12px; }
-  li { margin: 2px 0; }
-  hr { border: none; border-top: 1px solid #d8dee4; margin: 24px 0; }
-  .task-list-item { list-style: none; margin-left: -20px; }
-  .markdown-alert { padding: 8px 16px; margin: 8px 0; border-left: 4px solid; border-radius: 4px; }
-  .markdown-alert-note { background: #ddf4ff; border-color: #0969da; }
-  .markdown-alert-tip { background: #dafbe1; border-color: #1a7f37; }
-  .markdown-alert-warning { background: #fff8c5; border-color: #9a6700; }
-  .markdown-alert-caution { background: #ffebe9; border-color: #cf222e; }
-  .markdown-alert-title { font-weight: 600; margin-bottom: 4px; }
-`;
-
-function buildReadmeJs(escapedMd: string, baseUrl: string) {
-  return `
-    marked.setOptions({ gfm: true, breaks: false, highlight: function(code, lang) {
-      if (lang && hljs.getLanguage(lang)) { try { return hljs.highlight(code, { language: lang }).value; } catch(e) {} }
-      return hljs.highlightAuto(code).value;
-    }});
-    var md = \`${escapedMd}\`;
-    md = md.replace(/\\]\\\\(((?!https?:\\/\\/)[^)]+)\\\\)/g, function(m, p1) { return '](' + '${baseUrl.replace(/'/g, "\\'")}' + p1 + ')'; });
-    md = md.replace(/!\\[[^\\]]*\\]\\(((?!https?:\\/\\/)[^)]+)\\)/g, function(m, p1) { return m.replace(p1, '${baseUrl.replace(/'/g, "\\'")}' + p1); });
-    document.getElementById('md-content').innerHTML = marked.parse(md);
-    document.querySelectorAll('img').forEach(function(img) { if (/shields\\.io|badge\\.svg|badgen\\.net/i.test(img.src)) { img.src = img.src + (img.src.includes('?') ? '&format=png' : '?format=png'); } });
-    setTimeout(function() {
-      var h = document.getElementById('md-content').scrollHeight;
-      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'height', height: h }));
-    }, 300);
-  `;
-}
-
-/**
- * GitHub Flavored Markdown 渲染器
- * Native: WebView + marked + highlight.js
- * Web:    div + dangerouslySetInnerHTML + CDN
- */
-function MarkdownSection({ content, owner, repo }: { content: string; owner: string; repo: string }) {
-  const [webViewHeight, setWebViewHeight] = useState(200);
-  const [WebViewComp, setWebViewComp] = useState<any>(undefined);
-  const { width } = useWindowDimensions();
-  const loadAttempted = useRef(false);
-
-  // 懒加载 react-native-webview（仅 Native 平台）
-  useEffect(() => {
-    if (Platform.OS === 'web' || loadAttempted.current) return;
-    loadAttempted.current = true;
-    import('react-native-webview').then(
-      (m) => { setWebViewComp(() => m.WebView); },
-      () => { setWebViewComp(null); },
-    );
-  }, []);
-
-  if (!content) return null;
-
-  const cleaned = content.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
-  if (!cleaned) return null;
-
-  const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
-  const escapedMd = cleaned
-    .replace(/\\/g, '\\\\')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$')
-    .replace(/<\/(script|style)>/gi, '<\\/$1>');
-
-  const js = buildReadmeJs(escapedMd, baseUrl);
-  const fullHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"><\\/script><script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"><\\/script><style>${README_CSS}</style></head><body><div id="md-content"></div><script>${js}<\\/script></body></html>`;
-
-  const header = (
-    <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 10 }}>README</Text>
-  );
-
-  // ── Web 平台：直接渲染 HTML 到 div ──────────────────────────────────────────
-  if (Platform.OS === 'web') {
-    return (
-      <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
-        {header}
-        {/* @ts-ignore web only */}
-        <div
-          style={{ width: '100%', fontSize: 14, lineHeight: '22px', color: '#555', wordBreak: 'break-word' }}
-          dangerouslySetInnerHTML={{ __html: `<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"><style>${README_CSS}</style><div id="md-content"></div><script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"><\\/script><script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"><\\/script><script>${js}<\\/script>` }}
-        />
-      </View>
-    );
-  }
-
-  // ── Native 平台：WebView 加载中 ─────────────────────────────────────────────
-  if (WebViewComp === undefined) {
-    return (
-      <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
-        {header}
-        <ActivityIndicator color="#1677FF" style={{ paddingVertical: 12 }} />
-      </View>
-    );
-  }
-
-  // ── Native 平台：WebView 加载失败 ───────────────────────────────────────────
-  if (WebViewComp === null) {
-    return (
-      <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
-        {header}
-        <Text style={{ color: '#999', fontSize: 13 }}>当前平台不支持 README 渲染</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
-      {header}
-      <WebViewComp
-        source={{ html: fullHtml }}
-        style={{ width: width - 64, height: webViewHeight }}
-        scrollEnabled={false}
-        javaScriptEnabled={true}
-        originWhitelist={['*']}
-        onMessage={(e: any) => {
-          try {
-            const data = JSON.parse(e.nativeEvent.data);
-            if (data.type === 'height' && data.height > 0) {
-              setWebViewHeight(data.height);
-            }
-          } catch { /* ignore */ }
-        }}
-        onError={() => {}}
-      />
-    </View>
-  );
-}
 
 export default function DetailScreen() {
   useAndroidGoBack();
