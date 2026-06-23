@@ -78,11 +78,12 @@ export default function HomeTab() {
 
   useFocusEffect(useCallback(() => {
     const STALE_MS = 5 * 60 * 1000; // 5分钟
+    // lastLoadedAtRef===0 表示从未加载过（等价于原 apps.length===0）
     const isStale = Date.now() - lastLoadedAtRef.current > STALE_MS;
-    if (apps.length === 0 || isStale) {
+    if (isStale) {
       loadData(1, false);
     }
-  }, [apps.length, loadData]));
+  }, [loadData]));
 
   // 双击退出：传统 BackHandler 链路（enableOnBackInvokedCallback=false 后正常工作）
   useAndroidExitBack();
