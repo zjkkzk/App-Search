@@ -347,8 +347,15 @@ export default function DetailScreen() {
             { icon: 'git-branch-outline' as const, color: '#FA8C16', label: '最新版本',
               value: latestRawRelease?.tag_name === 'latest'
                 ? `${latestRawRelease?.published_at?.slice(0, 10).replace(/-/g, '/') ?? '-'} 构建`
-                : (latestRawRelease?.tag_name?.replace(/^v/i, '') || '-') },
-            { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间', value: latestRawRelease?.published_at ? latestRawRelease.published_at.slice(0, 10).replace(/-/g, '/') : '-' },
+                : (latestRawRelease?.tag_name?.replace(/^v/i, '')
+                    || app.latest_version?.replace(/^v/i, '')
+                    || '-') },
+            { icon: 'calendar-outline' as const, color: '#722ED1', label: '发布时间',
+              value: latestRawRelease?.published_at
+                ? latestRawRelease.published_at.slice(0, 10).replace(/-/g, '/')
+                : (app.latest_release_date
+                    ? app.latest_release_date.slice(0, 10).replace(/-/g, '/')
+                    : '-') },
           ].map((row) => (
             <View key={row.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Ionicons name={row.icon} size={16} color={row.color} />
