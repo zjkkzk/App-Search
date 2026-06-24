@@ -3,7 +3,7 @@
 
 export const README_CSS = `
   * { box-sizing: border-box; }
-  html, body { width: 100%; }
+  html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
     font-size: 14px; line-height: 1.6; color: #1F2328;
@@ -27,10 +27,10 @@ export const README_CSS = `
   }
   pre {
     background: #f6f8fa; border-radius: 6px; padding: 14px 16px;
-    overflow-x: auto; margin: 0 0 14px;
+    overflow-x: scroll; overflow-y: hidden; margin: 0 0 14px; max-width: 100%;
   }
-  pre code { background: none; padding: 0; font-size: 85%; border-radius: 0; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; display: block; overflow-x: auto; }
+  pre code { background: none; padding: 0; font-size: 85%; border-radius: 0; white-space: pre; }
+  table { border-collapse: collapse; width: 100%; max-width: 100%; margin: 8px 0 14px; display: block; overflow-x: scroll; }
   th, td { border: 1px solid #d8dee4; padding: 6px 12px; text-align: left; }
   th { background: #f6f8fa; font-weight: 600; }
   tr:nth-child(even) td { background: #f8f9fa; }

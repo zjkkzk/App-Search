@@ -16,9 +16,9 @@ const MIN_HEIGHT = 120;
 export default function MarkdownSection({ content, owner, repo }: Props) {
   const [height, setHeight] = useState(MIN_HEIGHT);
   const [loaded, setLoaded] = useState(false);
-  // 用实际窗口宽度算出 WebView 精确像素宽：屏幕横向 padding 16*2 + 卡片内 padding 16*2 = 64
+  // 屏幕 padding 12*2 + 卡片内 padding 16*2 = 56，算出 WebView 精确像素宽
   const { width: windowWidth } = useWindowDimensions();
-  const webViewWidth = windowWidth - 64;
+  const webViewWidth = windowWidth - 56;
 
   const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
 
@@ -82,6 +82,7 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
         javaScriptEnabled
         domStorageEnabled={false}
         cacheEnabled
+        scalesPageToFit={false}
       />
     </View>
   );
