@@ -80,9 +80,11 @@ const HEIGHT_SCRIPT = `
 
 /**
  * 构建用于 WebView 的完整 HTML 文档
- * markdown 内容通过 base64 编码避免所有转义问题
+ * @param markdown  原始 Markdown 文本
+ * @param baseUrl   相对路径前缀（raw.githubusercontent.com）
+ * @param viewportWidth  WebView 实际像素宽度，用于精确 viewport 避免缩放
  */
-export function buildReadmeHtml(markdown: string, baseUrl: string): string {
+export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth: number): string {
   // base64 编码：彻底避免 markdown 内容中反引号、$、\ 等导致的 JS 注入/转义问题
   // React Native 环境：使用 global btoa（React Native 已内置）
   const b64 = btoa(unescape(encodeURIComponent(markdown)));
@@ -151,7 +153,7 @@ export function buildReadmeHtml(markdown: string, baseUrl: string): string {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=${viewportWidth},initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"><\/script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"><\/script>

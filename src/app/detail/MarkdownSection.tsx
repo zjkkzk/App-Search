@@ -1,6 +1,6 @@
 // ─── README 渲染 — WebView 方案（marked.js GFM + highlight.js 代码高亮）────────
 // 效果与 GitHub 完全一致：标题、代码块语法高亮、表格、任务列表、Admonitions、徽章
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, Platform, ActivityIndicator, useWindowDimensions } from 'react-native';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 import { buildReadmeHtml } from './_readmeUtils';
@@ -22,18 +22,24 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
 
   const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
 
+  // ⚠️ 必须 memoize：html 变化会触发 WebView 完整重载，
+  // 若不 memo，每次 setHeight re-render 都会重载 → 无限收缩循环
+  const html = useMemo(
+    () => buildReadmeHtml(content, baseUrl, webViewWidth),
+    [content, baseUrl, webViewWidth]
+  );
+
   const onMessage = useCallback((e: WebViewMessageEvent) => {
     try {
       const data = JSON.parse(e.nativeEvent.data);
-      if (data.type === 'height' && typeof data.height === 'number' && data.height > MIN_HEIGHT) {
-        setHeight(data.height + 24); // padding buffer
+      if (data.type === 'height' && typeof data.height === 'number') {
+        // 只允许高度增大，防止短暂重排导致高度减小再触发重载循环
+        setHeight(prev => Math.max(prev, data.height + 24));
       }
     } catch { /* 忽略非 JSON 消息 */ }
   }, []);
 
   if (!content) return null;
-
-  const html = buildReadmeHtml(content, baseUrl);
 
   // ── Web 平台：iframe ──────────────────────────────────────────────────────
   if (Platform.OS === 'web') {
