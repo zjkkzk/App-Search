@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View, Text, Pressable, FlatList, ScrollView, ActivityIndicator,
 } from 'react-native';
@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/client/supabase';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
+import AppIcon from '@/components/openappstore/AppIcon';
+import TranslatedText from '@/components/openappstore/TranslatedText';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
 import { useUpdate } from '@/ctx/UpdateContext';
 import {
@@ -92,12 +94,17 @@ function TodaySection() {
                 width: 160, backgroundColor: '#fff', borderRadius: 16, padding: 14,
                 boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 8, color: 'rgba(0,0,0,0.07)' }],
               }}>
-              <View style={{ width: 48, height: 48, borderRadius: 14, backgroundColor: '#F0F4FF',
-                alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
-                <Ionicons name="logo-github" size={26} color="#1677FF" />
+              <View style={{ marginBottom: 10 }}>
+                <AppIcon owner={app.owner} url={app.avatar_url} name={app.name} size={48} />
               </View>
               <Text style={{ fontSize: 13, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>{app.name}</Text>
-              <Text style={{ fontSize: 11, color: '#888', marginTop: 3 }} numberOfLines={2}>{app.description || app.repo}</Text>
+              {app.description ? (
+                <TranslatedText style={{ fontSize: 11, color: '#888', marginTop: 3 }} numberOfLines={2}>
+                  {app.description}
+                </TranslatedText>
+              ) : (
+                <Text style={{ fontSize: 11, color: '#888', marginTop: 3 }} numberOfLines={1}>{app.repo}</Text>
+              )}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
                 <Ionicons name="star" size={11} color="#FFAA00" />
                 <Text style={{ fontSize: 11, color: '#AAA' }}>
