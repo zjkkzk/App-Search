@@ -66,10 +66,29 @@ const HEIGHT_SCRIPT = `
     if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(msg); }
     else if (window.parent && window.parent !== window) { window.parent.postMessage(msg, '*'); }
   }
-  // 阶段一：DOM 渲染完成后上报（文字、表格等布局已确定）
+  // 阶段一：DOM 渲染完成后立即上报（文字/表格布局已确定）
   setTimeout(reportHeight, 80);
-  // 阶段二：所有资源（图片等）加载完成后再上报，捕获图片撑开的高度
-  window.addEventListener('load', function() { setTimeout(reportHeight, 300); });
+  // 阶段二：等待图片加载 —— 为每张图片绑定 onload/onerror，确保图片撑开后重报
+  function bindImgListeners() {
+    var imgs = document.querySelectorAll('#md img');
+    var pending = imgs.length;
+    if (pending === 0) return;
+    function onImgDone() { reportHeight(); }
+    for (var i = 0; i < imgs.length; i++) {
+      if (imgs[i].complete) {
+        pending--;
+      } else {
+        imgs[i].addEventListener('load',  onImgDone);
+        imgs[i].addEventListener('error', onImgDone);
+      }
+    }
+    if (pending < imgs.length) reportHeight(); // 已有部分图片完成
+  }
+  // 阶段三：多级兜底延时，覆盖慢速网络 / WebView load 事件不可靠的情况
+  setTimeout(function() { bindImgListeners(); reportHeight(); }, 300);
+  setTimeout(reportHeight, 800);
+  setTimeout(reportHeight, 2000);
+  window.addEventListener('load', function() { setTimeout(reportHeight, 200); });
 `;
 
 /**
