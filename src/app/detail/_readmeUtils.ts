@@ -19,14 +19,12 @@ export const README_CSS = `
   p  { margin: 0 0 12px; }
   a  { color: #0969da; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  /* 覆盖 HTML width/height 属性和 inline style（如 width="480" / style="width:480px"）
-     防止超宽图片把文档最小内容宽撑到容器以外，导致 V 形收缩 */
-  img { max-width: 100% !important; width: auto !important; height: auto !important;
-        display: block; margin: 4px 0; }
-  /* 徽章/行内小图保持 inline */
-  p > img, li img { display: inline-block; margin: 1px 2px; }
+  /* 图片：max-width 限制宽度，不强制 width:auto 避免压缩小图 */
+  img { max-width: 100%; height: auto; display: block; margin: 4px 0; }
+  /* 徽章/行内小图、链接内图片保持 inline */
+  p > img, li img, a > img { display: inline-block; margin: 1px 2px; }
   /* 确保 markdown 根容器始终撑满视口宽度 */
-  #md { width: 100%; min-width: 100%; }
+  #md { width: 100%; }
   code {
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 85%; background: rgba(175,184,193,0.2);
@@ -41,19 +39,14 @@ export const README_CSS = `
   th, td { border: 1px solid #d8dee4; padding: 6px 12px; text-align: left; }
   th { background: #f6f8fa; font-weight: 600; }
   tr:nth-child(even) td { background: #f8f9fa; }
-  blockquote {
-    margin: 0 0 14px;
-    padding: 2px 14px; color: #656d76;
-  }
+  blockquote { margin: 0 0 14px; padding: 2px 14px; color: #656d76; }
   ul, ol { padding-left: 2em; margin: 0 0 12px; }
   li { margin: 3px 0; }
   li + li { margin-top: 4px; }
   li p { margin: 4px 0; }
   hr { border: none; border-top: 1px solid #d8dee4; margin: 20px 0; }
-  /* 任务列表 */
   .task-list-item { list-style: none; margin-left: -1.5em; }
   .task-list-item input[type=checkbox] { margin-right: .4em; vertical-align: middle; }
-  /* GitHub Admonitions */
   .markdown-alert { padding: 8px 16px; margin: 8px 0 14px; border-left: 4px solid; border-radius: 4px; }
   .markdown-alert-note      { background: #ddf4ff; border-color: #0969da; color: #0550ae; }
   .markdown-alert-tip       { background: #dafbe1; border-color: #1a7f37; color: #116329; }
@@ -61,13 +54,11 @@ export const README_CSS = `
   .markdown-alert-caution   { background: #ffebe9; border-color: #cf222e; color: #a40e26; }
   .markdown-alert-important { background: #fbefff; border-color: #8250df; color: #6639ba; }
   .markdown-alert-title { font-weight: 700; margin-bottom: 6px; }
-  /* 徽章行对齐（与上方 p > img inline 规则配合） */
-  a > img { display: inline-block; }
-  /* 代码块语言标签 */
   .hljs { background: transparent !important; }
 `;
 
-// 高度上报脚本：DOM 渲染完成后告知外层容器需要的高度
+// 高度上报脚本：分两阶段上报，确保图片等异步资源加载后高度也被捕获
+// 与 React Native onMessage 配合；source memoize 后不会触发重载循环
 const HEIGHT_SCRIPT = `
   function reportHeight() {
     var h = document.documentElement.scrollHeight || document.body.scrollHeight;
@@ -75,14 +66,10 @@ const HEIGHT_SCRIPT = `
     if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(msg); }
     else if (window.parent && window.parent !== window) { window.parent.postMessage(msg, '*'); }
   }
-  // 首次上报
-  reportHeight();
-  // 图片/字体加载完后再上报一次
-  window.addEventListener('load', function() { setTimeout(reportHeight, 200); });
-  // 监听图片加载完成
-  document.querySelectorAll('img').forEach(function(img) {
-    if (!img.complete) { img.addEventListener('load', function() { setTimeout(reportHeight, 100); }); }
-  });
+  // 阶段一：DOM 渲染完成后上报（文字、表格等布局已确定）
+  setTimeout(reportHeight, 80);
+  // 阶段二：所有资源（图片等）加载完成后再上报，捕获图片撑开的高度
+  window.addEventListener('load', function() { setTimeout(reportHeight, 300); });
 `;
 
 /**
@@ -154,16 +141,24 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
 
     document.getElementById('md').innerHTML = html;
 
-    // 7. DOM 层移除所有 img 的 width/height/style 属性
-    // CSS !important 无法覆盖浏览器布局算法的 HTML attribute 固有尺寸，
-    // 必须直接 removeAttribute 才能防止 <img width="480"> 把文档撑宽
+    // 7. 仅移除超出容器宽度的固定像素 width/height 属性（保留百分比、小尺寸徽章等）
+    // CSS max-width:100% 无法阻止浏览器在布局阶段用 HTML attribute 撑开文档最小宽，
+    // 因此对 width > viewportWidth 的图片直接 removeAttribute
+    var vpW = ${viewportWidth};
     document.querySelectorAll('#md img').forEach(function(img) {
-      img.removeAttribute('width');
-      img.removeAttribute('height');
-      img.removeAttribute('style');
+      var wAttr = img.getAttribute('width') || '';
+      var wNum = parseFloat(wAttr);
+      if (wAttr.indexOf('%') === -1 && wNum > vpW) {
+        img.removeAttribute('width');
+        img.removeAttribute('height');
+      }
+      // 移除 inline style 中超宽的 width（如 style="width:480px"）
+      if (img.style.width && img.style.width.indexOf('%') === -1 &&
+          parseFloat(img.style.width) > vpW) {
+        img.style.width = '';
+        img.style.height = '';
+      }
     });
-
-    ${HEIGHT_SCRIPT}
   `;
 
   return `<!DOCTYPE html>
