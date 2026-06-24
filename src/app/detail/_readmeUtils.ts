@@ -224,9 +224,13 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
 <body>
 <div id="md"></div>
 <script>
-  ${js}
-  ${HEIGHT_SCRIPT}
-</script>
+  // 等待 CDN 脚本（marked.js / highlight.js）加载完成后再执行渲染，
+  // 避免 marked/hljs 未定义时 ReferenceError 导致 #md 永远为空
+  window.addEventListener('load', function() {
+    ${js}
+    ${HEIGHT_SCRIPT}
+  });
+<\/script>
 </body>
 </html>`;
 }
