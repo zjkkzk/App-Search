@@ -1,7 +1,7 @@
 // ─── README 渲染 — WebView 方案（marked.js GFM + highlight.js 代码高亮）────────
 // 效果与 GitHub 完全一致：标题、代码块语法高亮、表格、任务列表、Admonitions、徽章
 import React, { useState, useCallback } from 'react';
-import { View, Text, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, Platform, ActivityIndicator, useWindowDimensions } from 'react-native';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 import { buildReadmeHtml } from './_readmeUtils';
 
@@ -16,6 +16,9 @@ const MIN_HEIGHT = 120;
 export default function MarkdownSection({ content, owner, repo }: Props) {
   const [height, setHeight] = useState(MIN_HEIGHT);
   const [loaded, setLoaded] = useState(false);
+  // 用实际窗口宽度算出 WebView 精确像素宽：屏幕横向 padding 16*2 + 卡片内 padding 16*2 = 64
+  const { width: windowWidth } = useWindowDimensions();
+  const webViewWidth = windowWidth - 64;
 
   const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
 
@@ -43,7 +46,6 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
           style={{ width: '100%', minHeight: 500, border: 'none', display: 'block' }}
           sandbox="allow-scripts allow-same-origin"
           onLoad={(e: any) => {
-            // 监听 postMessage 上报的高度
             const handler = (ev: MessageEvent) => {
               try {
                 const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
@@ -62,21 +64,20 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
 
   // ── Native 平台：WebView ──────────────────────────────────────────────────
   return (
-    <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4 }}>
+    <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4, width: '100%' }}>
       <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 10 }}>README</Text>
       {!loaded && (
         <ActivityIndicator size="small" color="#0969da" style={{ marginVertical: 20 }} />
       )}
       <WebView
         source={{ html, baseUrl: `https://github.com/${owner}/${repo}` }}
-        style={{ height, opacity: loaded ? 1 : 0 }}
+        style={{ height, width: webViewWidth, opacity: loaded ? 1 : 0 }}
         scrollEnabled={false}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
         originWhitelist={['*']}
         onMessage={onMessage}
         onLoad={() => setLoaded(true)}
-        // 允许加载 CDN 资源（marked.js / highlight.js / github.css）
         mixedContentMode="always"
         javaScriptEnabled
         domStorageEnabled={false}

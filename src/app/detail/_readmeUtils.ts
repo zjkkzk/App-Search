@@ -3,6 +3,7 @@
 
 export const README_CSS = `
   * { box-sizing: border-box; }
+  html, body { width: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
     font-size: 14px; line-height: 1.6; color: #1F2328;
