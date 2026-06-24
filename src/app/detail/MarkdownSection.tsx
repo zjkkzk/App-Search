@@ -22,11 +22,16 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
 
   const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/`;
 
-  // ⚠️ 必须 memoize：html 变化会触发 WebView 完整重载，
-  // 若不 memo，每次 setHeight re-render 都会重载 → 无限收缩循环
+  // ⚠️ html 与 source 都必须 memoize：
+  // - html 变化 → WebView 重载 → 重新测高 → setHeight → re-render → 循环
+  // - source 对象每次 render 新建引用 → WebView 同样判定变化并重载
   const html = useMemo(
     () => buildReadmeHtml(content, baseUrl, webViewWidth),
     [content, baseUrl, webViewWidth]
+  );
+  const source = useMemo(
+    () => ({ html, baseUrl: `https://github.com/${owner}/${repo}` }),
+    [html, owner, repo]
   );
 
   const onMessage = useCallback((e: WebViewMessageEvent) => {
@@ -76,7 +81,7 @@ export default function MarkdownSection({ content, owner, repo }: Props) {
         <ActivityIndicator size="small" color="#0969da" style={{ marginVertical: 20 }} />
       )}
       <WebView
-        source={{ html, baseUrl: `https://github.com/${owner}/${repo}` }}
+        source={source}
         style={{ height, width: webViewWidth, opacity: loaded ? 1 : 0 }}
         scrollEnabled={false}
         showsVerticalScrollIndicator={false}

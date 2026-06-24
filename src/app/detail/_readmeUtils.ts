@@ -153,6 +153,16 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
     });
 
     document.getElementById('md').innerHTML = html;
+
+    // 7. DOM 层移除所有 img 的 width/height/style 属性
+    // CSS !important 无法覆盖浏览器布局算法的 HTML attribute 固有尺寸，
+    // 必须直接 removeAttribute 才能防止 <img width="480"> 把文档撑宽
+    document.querySelectorAll('#md img').forEach(function(img) {
+      img.removeAttribute('width');
+      img.removeAttribute('height');
+      img.removeAttribute('style');
+    });
+
     ${HEIGHT_SCRIPT}
   `;
 
