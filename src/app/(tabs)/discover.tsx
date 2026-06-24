@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, Pressable, FlatList, ActivityIndicator, ScrollView } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,52 +9,53 @@ import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
+import {
+  TAXONOMY_CATEGORIES,
+  PLATFORM_LIST,
+  LANGUAGE_LIST,
+  STARS_FILTERS,
+  SORT_OPTIONS,
+} from '@/constants/catalogTaxonomy';
 
-const PLATFORMS = [
-  { key: '全平台', icon: 'grid-outline',        color: '#1677FF' },
-  { key: 'Android', icon: 'logo-android',       color: '#3DDC84' },
-  { key: 'iOS',     icon: 'logo-apple',          color: '#555' },
-  { key: 'Windows', icon: 'logo-windows',        color: '#0078D7' },
-  { key: 'macOS',   icon: 'logo-apple',          color: '#999' },
-  { key: 'Linux',   icon: 'terminal-outline',    color: '#E5A00D' },
-] as const;
+// 全部类别选项（含"全部"）
+const CATEGORY_OPTIONS = [{ key: '全部', label: '全部', topics: [] as string[] }, ...TAXONOMY_CATEGORIES];
 
-const CATEGORIES = [
-  { key: '全部',     topic: '' },
-  { key: '开发工具', topic: 'developer-tools' },
-  { key: '效率工具', topic: 'productivity' },
-  { key: '媒体',     topic: 'media' },
-  { key: '游戏',     topic: 'game' },
-  { key: '安全',     topic: 'security' },
-  { key: '社交',     topic: 'social' },
-  { key: '系统工具', topic: 'utility' },
-];
-
-const SORT_OPTIONS: { key: string; label: string; icon: string }[] = [
-  { key: 'stars',   label: 'Stars',   icon: 'star' },
-  { key: 'updated', label: '最新更新', icon: 'time-outline' },
-  { key: 'forks',   label: 'Forks',   icon: 'git-branch-outline' },
+// 安装包筛选
+const INSTALL_OPTIONS = [
+  { key: 'all',      label: '全部' },
+  { key: 'has_only', label: '有安装包' },
 ];
 
 export default function DiscoverTab() {
   useAndroidExitBack();
+  const params = useLocalSearchParams();
 
-  const [apps, setApps] = useState<AppItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // 筛选状态
+  const [platform,      setPlatform]      = useState<string>('全平台');
+  const [categoryKey,   setCategoryKey]   = useState<string>('全部');
+  const [language,      setLanguage]      = useState<string>('全部');
+  const [starsKey,      setStarsKey]      = useState<string>('any');
+  const [installFilter, setInstallFilter] = useState<string>('has_only');
+  const [sort,          setSort]          = useState<string>('stars');
+
+  // 数据状态
+  const [apps,        setApps]        = useState<AppItem[]>([]);
+  const [loading,     setLoading]     = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [platform, setPlatform] = useState<string>('全平台');
-  const [category, setCategory] = useState<string>('全部');
-  const [sort, setSort] = useState<string>('stars');
-  const [hasMore, setHasMore] = useState(false);
-  const [error, setError] = useState<string>('');
-  const loadingRef = useRef(false);
-  const pageRef = useRef(1);
-  const lastLoadedAtRef = useRef(0); // 记录上次加载时间戳
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [hasMore,     setHasMore]     = useState(false);
+  const [error,       setError]       = useState<string>('');
+  const loadingRef       = useRef(false);
+  const pageRef          = useRef(1);
+  const lastLoadedAtRef  = useRef(0);
+
+  // 接收来自首页/场景合集的导航参数（只在首次挂载时读取）
+  const initRef = useRef(false);
 
   const loadData = useCallback(async (
     pageNum = 1, isRefresh = false,
-    p = platform, cat = category, s = sort,
+    p = platform, catKey = categoryKey, lang = language,
+    sk = starsKey, inst = installFilter, s = sort,
   ) => {
     if (loadingRef.current && !isRefresh) return;
     loadingRef.current = true;
@@ -64,10 +65,19 @@ export default function DiscoverTab() {
     else setLoadingMore(true);
 
     try {
-      const topic = CATEGORIES.find((c) => c.key === cat)?.topic ?? '';
-      const { data, error: fnErr } = await supabase.functions.invoke('search-catalog', {
-        body: { platform: p !== '全平台' ? p : undefined, topic: topic || undefined, sort: s, page: pageNum, per_page: 20, _ts: Date.now() },
-      });
+      const catTopics = CATEGORY_OPTIONS.find((c) => c.key === catKey)?.topics ?? [];
+      const minStars  = STARS_FILTERS.find((f) => f.key === sk)?.value ?? 0;
+
+      const body: Record<string, unknown> = {
+        sort: s, page: pageNum, per_page: 20, _ts: Date.now(),
+        has_installable_assets: inst === 'has_only',
+      };
+      if (p !== '全平台')    body.platform   = p;
+      if (lang !== '全部')   body.language   = lang;
+      if (minStars > 0)       body.min_stars  = minStars;
+      if (catTopics.length)   body.topics     = catTopics;
+
+      const { data, error: fnErr } = await supabase.functions.invoke('search-catalog', { body });
       if (fnErr) {
         const msg = await fnErr?.context?.text?.().catch(() => '');
         throw new Error(msg || fnErr.message || '加载失败');
@@ -86,7 +96,7 @@ export default function DiscoverTab() {
       loadingRef.current = false;
       if (pageNum === 1) lastLoadedAtRef.current = Date.now();
     }
-  }, [platform, category, sort]);
+  }, [platform, categoryKey, language, starsKey, installFilter, sort]);
 
   const handleClearCacheAndReload = async () => {
     await clearAllCache();
@@ -97,19 +107,50 @@ export default function DiscoverTab() {
     loadData(1, false);
   };
 
-  // 1分钟内已加载过则不重复请求；超过1分钟或首次进入则刷新
+  // 接收导航参数并更新筛选条件
   useFocusEffect(useCallback(() => {
-    const STALE_MS = 60_000;
-    const isStale = Date.now() - lastLoadedAtRef.current > STALE_MS;
-    if (isStale) loadData(1, false);
-  }, [loadData]));
+    const paramPlatform = typeof params.platform === 'string' ? params.platform : null;
+    const paramTopics   = typeof params.topics   === 'string' ? params.topics   : null;
+    const paramSort     = typeof params.sort     === 'string' ? params.sort     : null;
 
-  const reset = (p: string, cat: string, s: string) => {
-    setPlatform(p); setCategory(cat); setSort(s);
+    let newPlatform    = platform;
+    let newCategoryKey = categoryKey;
+    let newSort        = sort;
+
+    if (paramPlatform) { newPlatform = paramPlatform; setPlatform(paramPlatform); }
+    if (paramTopics) {
+      // 找出 topics 匹配的分类 key（来自合集入口传入的 topics 字符串）
+      const topicArr = paramTopics.split(',');
+      const matched  = TAXONOMY_CATEGORIES.find(
+        (c) => topicArr.some((t) => c.topics.includes(t))
+      );
+      if (matched) { newCategoryKey = matched.key; setCategoryKey(matched.key); }
+    }
+    if (paramSort) { newSort = paramSort; setSort(paramSort); }
+
+    const STALE_MS = 60_000;
+    const filtersChanged = paramPlatform || paramTopics || paramSort;
+    const isStale = Date.now() - lastLoadedAtRef.current > STALE_MS;
+
+    if (filtersChanged || isStale) {
+      pageRef.current = 1;
+      setApps([]);
+      setHasMore(false);
+      loadData(1, false, newPlatform, newCategoryKey, language, starsKey, installFilter, newSort);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.platform, params.topics, params.sort]));
+
+  const reset = (
+    p: string, catKey: string, lang: string,
+    sk: string, inst: string, s: string,
+  ) => {
+    setPlatform(p); setCategoryKey(catKey); setLanguage(lang);
+    setStarsKey(sk); setInstallFilter(inst); setSort(s);
     pageRef.current = 1;
     setApps([]);
     setHasMore(false);
-    loadData(1, false, p, cat, s);
+    loadData(1, false, p, catKey, lang, sk, inst, s);
   };
 
   return (
@@ -121,7 +162,6 @@ export default function DiscoverTab() {
         onRefresh={() => { pageRef.current = 1; loadData(1, true); }}
         refreshing={refreshing}
         onEndReached={() => {
-          // lastLoadedAtRef>0 表示首次加载已完成，避免初始空列表触发、抢在 page1 前加载 page2
           if (lastLoadedAtRef.current > 0 && !loadingRef.current && hasMore) {
             const n = pageRef.current + 1;
             loadData(n);
@@ -131,22 +171,25 @@ export default function DiscoverTab() {
         contentContainerStyle={{ paddingBottom: 24 }}
         ListHeaderComponent={
           <View>
+            {/* 标题 */}
             <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 }}>
               <Text style={{ fontSize: 22, fontWeight: '700', color: '#1A1A1A' }}>发现</Text>
+              <Text style={{ fontSize: 12, color: '#AAA', marginTop: 2 }}>探索开源应用目录</Text>
             </View>
 
             {/* 平台筛选 */}
+            <FilterRowLabel label="平台" />
             <ScrollView horizontal showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 6, gap: 8 }}>
-              {PLATFORMS.map((p) => {
+              {[{ key: '全平台', label: '全平台', icon: 'grid-outline', color: '#1677FF' }, ...PLATFORM_LIST.map((p) => ({ ...p, label: p.label }))].map((p) => {
                 const active = platform === p.key;
                 return (
-                  <Pressable key={p.key} onPress={() => reset(p.key, category, sort)}
+                  <Pressable key={p.key} onPress={() => reset(p.key, categoryKey, language, starsKey, installFilter, sort)}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 5,
                       paddingHorizontal: 13, paddingVertical: 7, borderRadius: 20,
                       borderWidth: 1.5, borderColor: active ? '#1677FF' : '#E0E0E0',
                       backgroundColor: active ? '#EBF3FF' : '#fff' }}>
-                    <Ionicons name={p.icon as any} size={14} color={active ? '#1677FF' : p.color} />
+                    <Ionicons name={p.icon as any} size={14} color={active ? '#1677FF' : '#999'} />
                     <Text style={{ fontSize: 13, fontWeight: '500', color: active ? '#1677FF' : '#333' }}>{p.key}</Text>
                   </Pressable>
                 );
@@ -154,27 +197,79 @@ export default function DiscoverTab() {
             </ScrollView>
 
             {/* 分类筛选 */}
+            <FilterRowLabel label="类型" />
             <ScrollView horizontal showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 6, gap: 8 }}>
-              {CATEGORIES.map((c) => {
-                const active = category === c.key;
+              {CATEGORY_OPTIONS.map((c) => {
+                const active = categoryKey === c.key;
                 return (
-                  <Pressable key={c.key} onPress={() => reset(platform, c.key, sort)}
+                  <Pressable key={c.key} onPress={() => reset(platform, c.key, language, starsKey, installFilter, sort)}
                     style={{ paddingHorizontal: 13, paddingVertical: 6, borderRadius: 16,
                       backgroundColor: active ? '#1677FF' : '#F0F0F0' }}>
                     <Text style={{ fontSize: 13, fontWeight: active ? '600' : '400',
-                      color: active ? '#fff' : '#555' }}>{c.key}</Text>
+                      color: active ? '#fff' : '#555' }}>{c.label}</Text>
                   </Pressable>
                 );
               })}
             </ScrollView>
 
-            {/* 排序选项 */}
-            <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 10, gap: 8 }}>
+            {/* 编程语言筛选 */}
+            <FilterRowLabel label="语言" />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 6, gap: 8 }}>
+              {LANGUAGE_LIST.map((lang) => {
+                const active = language === lang;
+                return (
+                  <Pressable key={lang} onPress={() => reset(platform, categoryKey, lang, starsKey, installFilter, sort)}
+                    style={{ paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14,
+                      borderWidth: 1, borderColor: active ? '#9C27B0' : '#E0E0E0',
+                      backgroundColor: active ? '#F3E5F5' : '#fff' }}>
+                    <Text style={{ fontSize: 12, color: active ? '#9C27B0' : '#666',
+                      fontWeight: active ? '600' : '400' }}>{lang}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {/* Stars 门槛 + 安装包筛选 */}
+            <FilterRowLabel label="质量" />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 6, gap: 8 }}>
+              {STARS_FILTERS.map((f) => {
+                const active = starsKey === f.key;
+                return (
+                  <Pressable key={f.key} onPress={() => reset(platform, categoryKey, language, f.key, installFilter, sort)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4,
+                      paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14,
+                      borderWidth: 1, borderColor: active ? '#FFAA00' : '#E0E0E0',
+                      backgroundColor: active ? '#FFFDE7' : '#fff' }}>
+                    {active && <Ionicons name="star" size={11} color="#FFAA00" />}
+                    <Text style={{ fontSize: 12, color: active ? '#E65100' : '#666',
+                      fontWeight: active ? '600' : '400' }}>{f.label}</Text>
+                  </Pressable>
+                );
+              })}
+              {INSTALL_OPTIONS.map((opt) => {
+                const active = installFilter === opt.key;
+                return (
+                  <Pressable key={opt.key} onPress={() => reset(platform, categoryKey, language, starsKey, opt.key, sort)}
+                    style={{ paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14,
+                      borderWidth: 1, borderColor: active ? '#00897B' : '#E0E0E0',
+                      backgroundColor: active ? '#E0F2F1' : '#fff' }}>
+                    <Text style={{ fontSize: 12, color: active ? '#00695C' : '#666',
+                      fontWeight: active ? '600' : '400' }}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {/* 排序 */}
+            <FilterRowLabel label="排序" />
+            <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 10, gap: 8, flexWrap: 'wrap' }}>
               {SORT_OPTIONS.map((s) => {
                 const active = sort === s.key;
                 return (
-                  <Pressable key={s.key} onPress={() => reset(platform, category, s.key)}
+                  <Pressable key={s.key} onPress={() => reset(platform, categoryKey, language, starsKey, installFilter, s.key)}
                     style={{ paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12,
                       borderWidth: 1, borderColor: active ? '#1677FF' : '#E0E0E0',
                       backgroundColor: active ? '#EBF3FF' : '#fff',
@@ -192,20 +287,16 @@ export default function DiscoverTab() {
           (loading || lastLoadedAtRef.current === 0)
             ? <View style={{ padding: 16 }}>{[1,2,3,4].map((i) => <SkeletonCard key={i} />)}</View>
             : <View style={{ alignItems: 'center', paddingTop: 60, paddingHorizontal: 32 }}>
-                <View style={{
-                  width: 80, height: 80, borderRadius: 80,
+                <View style={{ width: 80, height: 80, borderRadius: 80,
                   backgroundColor: error ? '#FFF2F0' : '#F5F5F5',
-                  alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-                }}>
+                  alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
                   <Ionicons name={error ? 'alert-circle-outline' : 'compass-outline'} size={40} color={error ? '#FF4D4F' : '#CCC'} />
                 </View>
                 {error ? (
                   <>
                     <Text style={{ color: '#FF4D4F', fontSize: 14, textAlign: 'center', marginBottom: 12 }}>{error}</Text>
-                    <Pressable
-                      onPress={handleClearCacheAndReload}
-                      style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#1677FF', borderRadius: 20 }}
-                    >
+                    <Pressable onPress={handleClearCacheAndReload}
+                      style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#1677FF', borderRadius: 20 }}>
                       <Text style={{ color: '#fff', fontWeight: '600' }}>清除缓存并重试</Text>
                     </Pressable>
                   </>
@@ -213,10 +304,8 @@ export default function DiscoverTab() {
                   <>
                     <Text style={{ color: '#AAA', fontSize: 15, textAlign: 'center' }}>暂无数据</Text>
                     <Text style={{ color: '#CCC', fontSize: 13, textAlign: 'center', marginTop: 4 }}>下拉刷新或切换筛选条件</Text>
-                    <Pressable
-                      onPress={handleClearCacheAndReload}
-                      style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#F5F5F5', borderRadius: 20 }}
-                    >
+                    <Pressable onPress={handleClearCacheAndReload}
+                      style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#F5F5F5', borderRadius: 20 }}>
                       <Text style={{ color: '#666', fontSize: 13 }}>清除缓存重试</Text>
                     </Pressable>
                   </>
@@ -234,5 +323,15 @@ export default function DiscoverTab() {
         }
       />
     </SafeAreaView>
+  );
+}
+
+// 筛选行标签
+function FilterRowLabel({ label }: { label: string }) {
+  return (
+    <Text style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 2,
+      fontSize: 11, fontWeight: '600', color: '#AAA', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      {label}
+    </Text>
   );
 }
