@@ -32,39 +32,41 @@ async function fetchApps(body: Record<string, unknown>): Promise<AppItem[]> {
   return Array.isArray(data?.data) ? data.data : [];
 }
 
+// 生成随机页码（1-20），确保每次换一批都不同
+function randomPage(): number {
+  return Math.floor(Math.random() * 20) + 1;
+}
+
 // ─── 今日推荐组件 ─────────────────────────────────────────────────────────────
 function TodaySection() {
   const router = useRouter();
-  const [apps, setApps] = useState<AppItem[]>([]);
+  const [apps, setApps]     = useState<AppItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const seedRef = useRef(Math.floor(Date.now() / 1000 / 3600)); // 每小时换一批
+  const loadedRef = useRef(false);
 
-  useFocusEffect(useCallback(() => {
-    let active = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const items = await fetchApps({
-          sort: 'random', seed: seedRef.current,
-          per_page: 5, _ts: Date.now(),
-        });
-        if (active) setApps(items);
-      } catch { /* 忽略 */ }
-      finally { if (active) setLoading(false); }
-    })();
-    return () => { active = false; };
-  }, []));
-
-  const refresh = async () => {
+  const doLoad = useCallback(async (page: number) => {
     setLoading(true);
-    seedRef.current = Date.now();
     try {
+      // sort=updated + 随机页偏移，每次换一批都能拿到不同的应用
       const items = await fetchApps({
-        sort: 'random', seed: seedRef.current, per_page: 5, _ts: Date.now(),
+        sort: 'updated', page, per_page: 8, _ts: Date.now(),
       });
       setApps(items);
     } catch { /* 忽略 */ }
     finally { setLoading(false); }
+  }, []);
+
+  // 首次进入加载，后续聚焦不重复请求
+  useFocusEffect(useCallback(() => {
+    if (!loadedRef.current) {
+      loadedRef.current = true;
+      doLoad(randomPage());
+    }
+  }, [doLoad]));
+
+  const refresh = () => {
+    loadedRef.current = true; // 阻止 useFocusEffect 再次触发
+    doLoad(randomPage());
   };
 
   return (
@@ -72,7 +74,8 @@ function TodaySection() {
       {/* 标题行 */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <View style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: '#FFF3E0',
+            alignItems: 'center', justifyContent: 'center' }}>
             <Ionicons name="sparkles" size={18} color={ORANGE} />
           </View>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#1A1A1A' }}>今日推荐</Text>
@@ -82,39 +85,69 @@ function TodaySection() {
           <Text style={{ fontSize: 13, color: '#999' }}>换一批</Text>
         </Pressable>
       </View>
-      {/* 卡片横向滑动 */}
-      {loading ? (
-        <ActivityIndicator color={ORANGE} style={{ paddingVertical: 24 }} />
-      ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-          {apps.map((app) => (
-            <Pressable key={app.id}
-              onPress={() => router.push({ pathname: `/detail/${app.id}`, params: { owner: app.owner, repo: app.repo } } as any)}
-              style={{
-                width: 160, backgroundColor: '#fff', borderRadius: 16, padding: 14,
-                boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 8, color: 'rgba(0,0,0,0.07)' }],
-              }}>
-              <View style={{ marginBottom: 10 }}>
-                <AppIcon owner={app.owner} url={app.avatar_url} name={app.name} size={48} />
+
+      {/* 卡片横向滑动 —— loading 时渲染同尺寸骨架卡，避免高度跳变 */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 10, paddingRight: 4 }}>
+        {loading
+          ? [0,1,2,3,4].map((i) => (
+              <View key={i} style={{ width: 156, borderRadius: 18, padding: 14, backgroundColor: '#fff',
+                boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 10, color: 'rgba(0,0,0,0.06)' }] }}>
+                {/* 图标 + 名称行骨架 */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#EFEFEF' }} />
+                  <View style={{ flex: 1, gap: 5 }}>
+                    <View style={{ height: 12, borderRadius: 6, backgroundColor: '#EFEFEF', width: '80%' }} />
+                    <View style={{ height: 10, borderRadius: 5, backgroundColor: '#F5F5F5', width: '55%' }} />
+                  </View>
+                </View>
+                {/* 描述骨架（3行） */}
+                <View style={{ gap: 5 }}>
+                  <View style={{ height: 10, borderRadius: 5, backgroundColor: '#EFEFEF', width: '100%' }} />
+                  <View style={{ height: 10, borderRadius: 5, backgroundColor: '#F5F5F5', width: '90%' }} />
+                  <View style={{ height: 10, borderRadius: 5, backgroundColor: '#F5F5F5', width: '70%' }} />
+                </View>
+                {/* Stars 行骨架 */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}>
+                  <View style={{ width: 11, height: 11, borderRadius: 6, backgroundColor: '#EFEFEF' }} />
+                  <View style={{ height: 10, borderRadius: 5, backgroundColor: '#EFEFEF', width: 36 }} />
+                </View>
               </View>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>{app.name}</Text>
-              {app.description ? (
-                <TranslatedText style={{ fontSize: 11, color: '#888', marginTop: 3 }} numberOfLines={2}>
-                  {app.description}
-                </TranslatedText>
-              ) : (
-                <Text style={{ fontSize: 11, color: '#888', marginTop: 3 }} numberOfLines={1}>{app.repo}</Text>
-              )}
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
-                <Ionicons name="star" size={11} color="#FFAA00" />
-                <Text style={{ fontSize: 11, color: '#AAA' }}>
-                  {app.stars >= 1000 ? `${(app.stars / 1000).toFixed(1)}k` : String(app.stars)}
-                </Text>
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
-      )}
+            ))
+          : apps.map((app) => (
+              <Pressable key={app.id}
+                onPress={() => router.push({ pathname: `/detail/${app.id}`,
+                  params: { owner: app.owner, repo: app.repo } } as any)}
+                style={{ width: 156, backgroundColor: '#fff', borderRadius: 18, padding: 14,
+                  boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 10, color: 'rgba(0,0,0,0.08)' }] }}>
+                {/* 图标 + 名称同行 */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <AppIcon owner={app.owner} url={app.avatar_url} name={app.name} size={40} priority="high" />
+                  <Text style={{ flex: 1, fontSize: 13, fontWeight: '700', color: '#1A1A1A' }}
+                    numberOfLines={2}>{app.name}</Text>
+                </View>
+                {/* 描述 */}
+                {app.description ? (
+                  <TranslatedText style={{ fontSize: 11, color: '#777', lineHeight: 16 }} numberOfLines={3}>
+                    {app.description}
+                  </TranslatedText>
+                ) : (
+                  <Text style={{ fontSize: 11, color: '#AAA' }} numberOfLines={1}>{app.repo}</Text>
+                )}
+                {/* Stars + 语言 */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}>
+                  <Ionicons name="star" size={11} color="#FFAA00" />
+                  <Text style={{ fontSize: 11, color: '#AAA', flex: 1 }}>
+                    {app.stars >= 1000 ? `${(app.stars / 1000).toFixed(1)}k` : String(app.stars)}
+                  </Text>
+                  {app.language ? (
+                    <Text style={{ fontSize: 10, color: '#BBB' }}>{app.language}</Text>
+                  ) : null}
+                </View>
+              </Pressable>
+            ))
+        }
+      </ScrollView>
     </View>
   );
 }
@@ -179,70 +212,6 @@ function PlatformsSection() {
   );
 }
 
-// ─── 最新发布组件 ─────────────────────────────────────────────────────────────
-function LatestSection() {
-  const [apps, setApps] = useState<AppItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const loadingRef = useRef(false);
-
-  const load = useCallback(async (p: number) => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    if (p === 1) setLoading(true); else setLoadingMore(true);
-    try {
-      const items = await fetchApps({ sort: 'updated', page: p, per_page: 10, _ts: Date.now() });
-      if (p === 1) setApps(items); else setApps((prev) => [...prev, ...items]);
-      setHasMore(items.length === 10);
-    } catch { /* 忽略 */ }
-    finally {
-      setLoading(false);
-      setLoadingMore(false);
-      loadingRef.current = false;
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => {
-    setPage(1);
-    load(1);
-  }, [load]));
-
-  const loadMore = () => {
-    if (!loadingRef.current && hasMore) {
-      const n = page + 1;
-      setPage(n);
-      load(n);
-    }
-  };
-
-  return (
-    <View style={{ marginHorizontal: 12, marginBottom: 20 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-        <View style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name="time" size={18} color="#00897B" />
-        </View>
-        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1A1A1A' }}>最新发布</Text>
-      </View>
-      {loading ? (
-        <View>{[1,2,3].map((i) => <SkeletonCard key={i} />)}</View>
-      ) : (
-        <>
-          {apps.map((app) => <AppCard key={app.id} app={app} />)}
-          {loadingMore && <ActivityIndicator color="#1677FF" style={{ paddingVertical: 12 }} />}
-          {hasMore && !loadingMore && (
-            <Pressable onPress={loadMore}
-              style={{ alignItems: 'center', paddingVertical: 12 }}>
-              <Text style={{ color: '#1677FF', fontSize: 13 }}>加载更多</Text>
-            </Pressable>
-          )}
-        </>
-      )}
-    </View>
-  );
-}
-
 // ─── 分类宫格组件 ─────────────────────────────────────────────────────────────
 function CategoryGrid() {
   const router = useRouter();
@@ -274,18 +243,73 @@ function CategoryGrid() {
   );
 }
 
+// ─── 最新发布标题行（只渲染标题，数据由外层 FlatList 驱动） ──────────────────
+function LatestSectionHeader() {
+  return (
+    <View style={{ marginHorizontal: 12, marginBottom: 10, marginTop: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="time" size={18} color="#00897B" />
+        </View>
+        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1A1A1A' }}>最新发布</Text>
+      </View>
+    </View>
+  );
+}
+
 // ─── 主页面 ───────────────────────────────────────────────────────────────────
 export default function HomeTab() {
   const router = useRouter();
   const { pendingCount } = useUpdate();
   useAndroidExitBack();
 
+  // 最新发布数据状态（提升至顶层，让外层 FlatList 的 onEndReached 驱动自动加载）
+  const [latestApps, setLatestApps]       = useState<AppItem[]>([]);
+  const [latestLoading, setLatestLoading] = useState(true);
+  const [latestMore, setLatestMore]       = useState(false);
+  const [latestLoadingMore, setLatestLoadingMore] = useState(false);
+  const latestPageRef  = useRef(1);
+  const latestBusyRef  = useRef(false);
+  const lastLoadedAtRef = useRef(0);
+
+  const loadLatest = useCallback(async (p: number) => {
+    if (latestBusyRef.current) return;
+    latestBusyRef.current = true;
+    if (p === 1) setLatestLoading(true); else setLatestLoadingMore(true);
+    try {
+      const items = await fetchApps({ sort: 'updated', page: p, per_page: 20, _ts: Date.now() });
+      if (p === 1) setLatestApps(items); else setLatestApps((prev) => [...prev, ...items]);
+      latestPageRef.current = p;
+      setLatestMore(items.length === 20);
+      if (p === 1) lastLoadedAtRef.current = Date.now();
+    } catch { /* 忽略 */ }
+    finally {
+      setLatestLoading(false);
+      setLatestLoadingMore(false);
+      latestBusyRef.current = false;
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    const STALE_MS = 60_000;
+    if (Date.now() - lastLoadedAtRef.current > STALE_MS) {
+      latestPageRef.current = 1;
+      loadLatest(1);
+    }
+  }, [loadLatest]));
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F5F6F8' }} edges={['top']}>
       <FlatList
-        data={[1]}   // 单条占位，内容全部在 ListHeaderComponent 里
-        keyExtractor={() => 'main'}
-        renderItem={() => null}
+        data={latestApps}
+        keyExtractor={(item) => String(item.id)}
+        renderItem={({ item }) => <AppCard app={item} />}
+        onEndReachedThreshold={0.5}
+        onEndReached={() => {
+          if (lastLoadedAtRef.current > 0 && !latestBusyRef.current && latestMore) {
+            loadLatest(latestPageRef.current + 1);
+          }
+        }}
         contentContainerStyle={{ paddingBottom: 32 }}
         ListHeaderComponent={
           <View>
@@ -324,19 +348,29 @@ export default function HomeTab() {
               </Pressable>
             </View>
 
-            {/* 标语 */}
-            <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-              <Text style={{ fontSize: 22, fontWeight: '700', color: '#1A1A1A' }}>开源应用商店</Text>
-              <Text style={{ fontSize: 13, color: '#888', marginTop: 3 }}>发现可安装 · 可信赖 · 正在流行的开源应用</Text>
-            </View>
-
             {/* 各内容区块 */}
             <TodaySection />
             <CollectionsSection />
             <PlatformsSection />
             <CategoryGrid />
-            <LatestSection />
+
+            {/* 最新发布标题 + 骨架屏（首次加载时） */}
+            <LatestSectionHeader />
+            {latestLoading && (
+              <View style={{ marginHorizontal: 12 }}>
+                {[1,2,3].map((i) => <SkeletonCard key={i} />)}
+              </View>
+            )}
           </View>
+        }
+        ListFooterComponent={
+          latestLoadingMore
+            ? <View style={{ paddingVertical: 16 }}><ActivityIndicator color="#1677FF" /></View>
+            : latestMore
+              ? <View style={{ paddingVertical: 12, alignItems: 'center' }}><Text style={{ color: '#CCC', fontSize: 12 }}>上滑加载更多</Text></View>
+              : latestApps.length > 0
+                ? <View style={{ paddingVertical: 16, alignItems: 'center' }}><Text style={{ color: '#CCC', fontSize: 12 }}>— 已显示全部 —</Text></View>
+                : null
         }
       />
     </SafeAreaView>
