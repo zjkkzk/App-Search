@@ -19,7 +19,14 @@ export const README_CSS = `
   p  { margin: 0 0 12px; }
   a  { color: #0969da; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  img { max-width: 100%; height: auto; vertical-align: middle; }
+  /* 覆盖 HTML width/height 属性和 inline style（如 width="480" / style="width:480px"）
+     防止超宽图片把文档最小内容宽撑到容器以外，导致 V 形收缩 */
+  img { max-width: 100% !important; width: auto !important; height: auto !important;
+        display: block; margin: 4px 0; }
+  /* 徽章/行内小图保持 inline */
+  p > img, li img { display: inline-block; margin: 1px 2px; }
+  /* 确保 markdown 根容器始终撑满视口宽度 */
+  #md { width: 100%; min-width: 100%; }
   code {
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 85%; background: rgba(175,184,193,0.2);
@@ -54,8 +61,8 @@ export const README_CSS = `
   .markdown-alert-caution   { background: #ffebe9; border-color: #cf222e; color: #a40e26; }
   .markdown-alert-important { background: #fbefff; border-color: #8250df; color: #6639ba; }
   .markdown-alert-title { font-weight: 700; margin-bottom: 6px; }
-  /* 徽章行对齐 */
-  p > img { display: inline-block; margin: 1px 2px; }
+  /* 徽章行对齐（与上方 p > img inline 规则配合） */
+  a > img { display: inline-block; }
   /* 代码块语言标签 */
   .hljs { background: transparent !important; }
 `;
