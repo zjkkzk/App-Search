@@ -115,7 +115,7 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
     // 1. 解码原始 Markdown
     var raw = decodeURIComponent(escape(atob('${b64}')));
 
-    // 2. 解析相对 URL → 绝对 URL（三种形式全覆盖）
+    // 2. 解析相对 URL → 绝对 URL（Markdown 语法部分，HTML img 标签在 DOM 阶段修正）
     // 2a. Markdown 行内链接 [text](relative/path)
     raw = raw.replace(/(\\]\\()((?!https?:\\/\\/|mailto:|#)[^)]+)(\\))/g, function(m, a, p, c) {
       return a + '${safeBase}' + p + c;
@@ -124,16 +124,11 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
     raw = raw.replace(/(!\\[[^\\]]*\\]\\()((?!https?:\\/\\/)[^)]+)(\\))/g, function(m, a, p, c) {
       return a + '${safeBase}' + p + c;
     });
-    // 2c. HTML <img src="relative"> / <img src='relative'>（README 中常见 HTML 标签写法）
-    raw = raw.replace(/(<img[^>]+\\bsrc=)(["'])((?!https?:\\/\\/|data:|\/\/)[^"']+)(\\2)/gi, function(m, pre, q, p, qc) {
-      return pre + q + '${safeBase}' + p + qc;
-    });
 
     // 3. 配置 marked（GFM + 代码高亮）
     marked.use({
       gfm: true,
       breaks: false,
-      extensions: [],
     });
     var renderer = new marked.Renderer();
     renderer.code = function(code, lang) {
