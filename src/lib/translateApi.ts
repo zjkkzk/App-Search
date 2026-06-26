@@ -122,6 +122,27 @@ export async function translateBatch(texts: string[], to: 'zh' | 'en'): Promise<
         (r: { dst: string }) => r.dst
       );
 
+      // 数量校验：API 返回条数须等于发送条数，否则说明 API 对某行做了合并/拆分，
+      // 强行按索引映射会导致翻译文字错位 → 降级为逐条单独翻译
+      if (translated.length !== batch.length) {
+        for (const item of batch) {
+          try {
+            const { data: sd, error: se } = await supabase.functions.invoke('text-translation', {
+              body: { q: item.text, from: 'auto', to },
+            });
+            if (se || sd?.error_code) throw new Error('single translate failed');
+            const dst: string = (sd?.result?.trans_result ?? [])
+              .map((r: { dst: string }) => r.dst).join(' ') || item.text;
+            results[item.idx] = dst;
+            memCache.set(`${to}|${item.text}`, dst);
+          } catch {
+            results[item.idx] = item.text;
+          }
+        }
+        persistCache();
+        continue;
+      }
+
       batch.forEach((item, i) => {
         const dst = translated[i] ?? item.text;
         results[item.idx] = dst;
@@ -263,19 +284,12 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
     const linkRe = /\[([^\]]*)\]\(([^)]+)\)/g;
     let m: RegExpExecArray | null;
     while ((m = linkRe.exec(body)) !== null) {
-      // 保护 [ 之前和 ] 之后的部分，以及 (url) 部分
-      // 实际上我们只需要标记哪些部分不翻译
-      // 保护 ]( 和 ) 之间的 URL
-      const midStart = m.index + 1 + m[1].length; // ] 的位置
-      const midEnd = midStart + 2; // ]( 的长度
-      ranges.push([midStart, midEnd]);
-      
-      const urlStart = midEnd;
-      const urlEnd = urlStart + m[2].length;
-      ranges.push([urlStart, urlEnd + 1]); // 包含最后的 )
+      const urlStart = m.index + 1 + m[1].length + 2;
+      const urlEnd   = urlStart + m[2].length;
+      ranges.push([urlStart, urlEnd]);
     }
   }
-  // 裸 URL
+  // 裸 URL（http/https）
   scan(/https?:\/\/[^\s)>\]"'`|]+/g);
 
   // 表格行：| 是列分隔符，需原样保留，不送翻译
@@ -304,10 +318,6 @@ function sanitizeTranslated(text: string, inTable: boolean): string {
 
   // 2. 表格单元格内：把半角 | 转为全角 ｜，防止破坏表格列结构
   if (inTable) t = t.replace(/\|/g, '｜');
-  
-  // 3. 修复翻译可能破坏的 Markdown 链接结构（如 [ text ] ( url )）
-  t = t.replace(/\[\s+/g, '[').replace(/\s+\]/g, ']');
-  t = t.replace(/\(\s+/g, '(').replace(/\s+\)/g, ')');
 
   return t;
 }
@@ -361,6 +371,22 @@ function splitToBlocks(md: string): MarkdownBlock[] {
 
     // ── 表格分隔行（|---|---| 或 :---: 等）— 原样保留
     if (/^\s*\|?[\s:]*-{2,}[\s:]*[|\s:|-]*$/.test(line) && trimmed.length > 0) {
+      blocks.push({ lines: [line], raw: true });
+      i++;
+      continue;
+    }
+
+    // ── 水平分隔线 *** / ___ / === / --- 独立行（三个以上相同符号，可含空格）
+    // 注：--- 已被上面表格分隔行正则覆盖；此处补充 *** / ___ / ===
+    if (/^\s*(\*{3,}|_{3,}|={3,})[\s*_=]*$/.test(trimmed) && trimmed.length > 0) {
+      blocks.push({ lines: [line], raw: true });
+      i++;
+      continue;
+    }
+
+    // ── Setext 标题下划线（下一行是 === 或 ---，当前行是标题文字）
+    // 下划线行本身标为 raw；上一行（文字行）由后续普通流程处理翻译
+    if (/^=+\s*$/.test(trimmed) && trimmed.length > 0) {
       blocks.push({ lines: [line], raw: true });
       i++;
       continue;
