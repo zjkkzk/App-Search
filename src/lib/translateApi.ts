@@ -263,9 +263,16 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
     const linkRe = /\[([^\]]*)\]\(([^)]+)\)/g;
     let m: RegExpExecArray | null;
     while ((m = linkRe.exec(body)) !== null) {
-      const urlStart = m.index + 1 + m[1].length + 2;
-      const urlEnd   = urlStart + m[2].length;
-      ranges.push([urlStart, urlEnd]);
+      // 保护 [ 之前和 ] 之后的部分，以及 (url) 部分
+      // 实际上我们只需要标记哪些部分不翻译
+      // 保护 ]( 和 ) 之间的 URL
+      const midStart = m.index + 1 + m[1].length; // ] 的位置
+      const midEnd = midStart + 2; // ]( 的长度
+      ranges.push([midStart, midEnd]);
+      
+      const urlStart = midEnd;
+      const urlEnd = urlStart + m[2].length;
+      ranges.push([urlStart, urlEnd + 1]); // 包含最后的 )
     }
   }
   // 裸 URL
@@ -297,6 +304,10 @@ function sanitizeTranslated(text: string, inTable: boolean): string {
 
   // 2. 表格单元格内：把半角 | 转为全角 ｜，防止破坏表格列结构
   if (inTable) t = t.replace(/\|/g, '｜');
+  
+  // 3. 修复翻译可能破坏的 Markdown 链接结构（如 [ text ] ( url )）
+  t = t.replace(/\[\s+/g, '[').replace(/\s+\]/g, ']');
+  t = t.replace(/\(\s+/g, '(').replace(/\s+\)/g, ')');
 
   return t;
 }
