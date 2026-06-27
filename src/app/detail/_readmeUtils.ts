@@ -126,20 +126,30 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
     // 1. 原始 Markdown 内容（JSON 字符串字面量，已安全转义）
     var raw = ${safeMarkdown};
 
-    // 2. 解析相对 URL → 绝对 URL（Markdown 语法部分，HTML img 标签在 DOM 阶段修正）
+    // 2. 解析相对 URL → 绝对 URL（统一在 DOM 阶段处理，避免误改 Markdown 源文本）
     var _base = ${safeBase};
-    // 2a. Markdown 行内链接 [text](relative/path)
-    raw = raw.replace(/(\\]\\()((?!https?:\\/\\/|mailto:|#)[^)]+)(\\))/g, function(m, a, p, c) {
-      return a + _base + p + c;
-    });
-    // 2b. Markdown 图片 ![alt](relative/path)
-    raw = raw.replace(/(!\\[[^\\]]*\\]\\()((?!https?:\\/\\/)[^)]+)(\\))/g, function(m, a, p, c) {
-      return a + _base + p + c;
-    });
+    function toAbsoluteUrl(url) {
+      if (!url) return url;
+      if (/^(?:[a-z]+:)?\\/\\//i.test(url) || /^(mailto:|tel:|data:|#)/i.test(url)) return url;
+      try { return new URL(url, _base).toString(); }
+      catch (e) { return url; }
+    }
 
     // 3. 配置 marked（GFM + 代码高亮）
     marked.use({ gfm: true, breaks: false, html: true });
     var renderer = new marked.Renderer();
+    renderer.link = function(href, title, text) {
+      var safeHref = toAbsoluteUrl(href || '');
+      var titleAttr = title ? ' title="' + String(title).replace(/"/g, '&quot;') + '"' : '';
+      var relAttr = /^https?:\\/\\//i.test(safeHref) ? ' target="_blank" rel="noopener noreferrer"' : '';
+      return '<a href="' + safeHref + '"' + titleAttr + relAttr + '>' + text + '</a>';
+    };
+    renderer.image = function(href, title, text) {
+      var safeSrc = toAbsoluteUrl(href || '');
+      var titleAttr = title ? ' title="' + String(title).replace(/"/g, '&quot;') + '"' : '';
+      var altAttr = text ? String(text).replace(/"/g, '&quot;') : '';
+      return '<img src="' + safeSrc + '" alt="' + altAttr + '"' + titleAttr + '>';
+    };
     renderer.code = function(code, lang) {
       var language = (lang || '').split(/[\\s,]/)[0];
       var highlighted = '';
@@ -152,17 +162,8 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
       return '<pre><code class="hljs language-' + (language || 'plaintext') + '">' + highlighted + '</code></pre>';
     };
 
-    // 4. GitHub Admonitions: > [!NOTE] → 彩色提示框
-    raw = raw.replace(/^>\\s*\\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT)\\]\\s*$/gm, function(_, type) {
-      var t = type.toLowerCase();
-      var labels = { note:'📘 Note', tip:'✅ Tip', warning:'⚠️ Warning', caution:'🚨 Caution', important:'❗ Important' };
-      return '> <div class="markdown-alert-title markdown-alert-' + t + '">' + (labels[t]||type) + '</div>';
-    });
-    // 包裹 blockquote 中含有 alert-title 的为 alert div
+    // 4. 先按标准 Markdown 渲染，再对 DOM 做安全增强
     var html = marked.parse(raw, { renderer: renderer });
-    html = html.replace(/<blockquote>\\s*<p><div class="markdown-alert-title (markdown-alert-[^"]+)">([^<]+)<\\/div>/g,
-      '<div class="markdown-alert $1"><div class="markdown-alert-title">$2</div><p>');
-    html = html.replace(/<\\/p>\\s*<\\/blockquote>/g, '</p></div>');
 
     // 5. 任务列表：- [ ] / - [x]
     html = html.replace(/<li><p>\\[ \\]/g, '<li class="task-list-item"><p><input type="checkbox" disabled> ');
@@ -177,22 +178,65 @@ export function buildReadmeHtml(markdown: string, baseUrl: string, viewportWidth
 
     document.getElementById('md').innerHTML = html;
 
-    // 7. 仅移除超出容器宽度的固定像素 width/height 属性（保留百分比、小尺寸徽章等）
+    // 7. DOM 阶段修正相对链接/图片，并把 GitHub Alert 升级为提示框
+    document.querySelectorAll('#md a[href]').forEach(function(link) {
+      var href = link.getAttribute('href') || '';
+      var safeHref = toAbsoluteUrl(href);
+      if (safeHref && safeHref !== href) link.setAttribute('href', safeHref);
+      if (/^https?:\\/\\//i.test(safeHref)) {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    var alertLabels = {
+      note: 'Note',
+      tip: 'Tip',
+      warning: 'Warning',
+      caution: 'Caution',
+      important: 'Important'
+    };
+    document.querySelectorAll('#md blockquote').forEach(function(quote) {
+      var firstPara = quote.querySelector('p');
+      if (!firstPara) return;
+      var firstText = (firstPara.textContent || '').trim();
+      var match = firstText.match(/^\\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT)\\]\\s*(.*)$/i);
+      if (!match) return;
+
+      var type = match[1].toLowerCase();
+      var trailing = match[2] || '';
+      if (trailing) firstPara.textContent = trailing;
+      else firstPara.remove();
+
+      var alert = document.createElement('div');
+      alert.className = 'markdown-alert markdown-alert-' + type;
+
+      var title = document.createElement('div');
+      title.className = 'markdown-alert-title';
+      title.textContent = alertLabels[type] || match[1];
+      alert.appendChild(title);
+
+      while (quote.firstChild) {
+        alert.appendChild(quote.firstChild);
+      }
+      quote.replaceWith(alert);
+    });
+
+    // 8. 仅移除超出容器宽度的固定像素 width/height 属性（保留百分比、小尺寸徽章等）
     var vpW = ${viewportWidth};
     document.querySelectorAll('#md img').forEach(function(img) {
-      // 7a. 兜底：确保 DOM 中所有 img src 为绝对 URL
+      // 8a. 兜底：确保 DOM 中所有 img src 为绝对 URL
       var src = img.getAttribute('src') || '';
-      if (src && !/^https?:\\/\\/|^data:|^\\/\\//.test(src)) {
-        img.setAttribute('src', _base + src.replace(/^\\//, ''));
-      }
-      // 7b. 移除超宽的 width/height HTML 属性
+      var safeSrc = toAbsoluteUrl(src);
+      if (safeSrc && safeSrc !== src) img.setAttribute('src', safeSrc);
+      // 8b. 移除超宽的 width/height HTML 属性
       var wAttr = img.getAttribute('width') || '';
       var wNum = parseFloat(wAttr);
       if (wAttr.indexOf('%') === -1 && wNum > vpW) {
         img.removeAttribute('width');
         img.removeAttribute('height');
       }
-      // 7c. 移除 inline style 中超宽的 width（如 style="width:480px"）
+      // 8c. 移除 inline style 中超宽的 width（如 style="width:480px"）
       if (img.style.width && img.style.width.indexOf('%') === -1 &&
           parseFloat(img.style.width) > vpW) {
         img.style.width = '';

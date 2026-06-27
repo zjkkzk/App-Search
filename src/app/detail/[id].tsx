@@ -45,6 +45,7 @@ export default function DetailScreen() {
   const [latestRawRelease, setLatestRawRelease] = useState<GitHubRelease | null>(null);
   const [readme, setReadme] = useState('');
   const [loading, setLoading] = useState(true);
+  const [readmeLoading, setReadmeLoading] = useState(false);
   const [favored, setFavored] = useState(false);
   const [error, setError] = useState('');
   const [expandedRelease, setExpandedRelease] = useState<number | null>(null);
@@ -59,11 +60,14 @@ export default function DetailScreen() {
       try {
         setLoading(true);
         setError('');
-        const [detail, rels, latestRel, md] = await Promise.all([
+        setApp(null);
+        setReleases([]);
+        setLatestRawRelease(null);
+        setExpandedRelease(null);
+        const [detail, rels, latestRel] = await Promise.all([
           fetchRepoDetail(owner, repo),
           fetchReleases(owner, repo, 1, false).catch(() => [] as GitHubRelease[]),
           fetchLatestRelease(owner, repo).catch(() => null),
-          fetchReadme(owner, repo).catch(() => ''),
         ]);
         if (cancelled) return;
         setApp(detail);
@@ -79,19 +83,21 @@ export default function DetailScreen() {
         setLatestRawRelease(latestRel ?? rels[0] ?? null);
         setReleases(installRels);
         if (installRels.length > 0) setExpandedRelease(installRels[0].id);
-        setReadme(md);
-        const f = await isFavorite(detail.id).catch(() => false);
-        // 有 Token 时以 GitHub 实际 star 状态为准，并同步本地收藏
-        const ghStarred = await checkIfStarred(detail.owner, detail.repo);
-        if (ghStarred !== null) {
-          // GitHub 已 star 但本地未收藏 → 补录本地
-          if (ghStarred && !f) await addFavorite(detail).catch(() => {});
-          // 本地收藏但 GitHub 未 star → 以 GitHub 为准，清除本地
-          if (!ghStarred && f) await removeFavorite(detail.id).catch(() => {});
-          setFavored(ghStarred);
-        } else {
+
+        // 收藏同步不阻塞详情页渲染，避免拖慢下载链接展示
+        void (async () => {
+          const f = await isFavorite(detail.id).catch(() => false);
+          if (cancelled) return;
           setFavored(f);
-        }
+
+          // 有 Token 时以 GitHub 实际 star 状态为准，并同步本地收藏
+          const ghStarred = await checkIfStarred(detail.owner, detail.repo);
+          if (cancelled || ghStarred === null) return;
+
+          if (ghStarred && !f) await addFavorite(detail).catch(() => {});
+          if (!ghStarred && f) await removeFavorite(detail.id).catch(() => {});
+          if (!cancelled) setFavored(ghStarred);
+        })();
       } catch (e: any) {
         if (cancelled) return;
         const msg = e?.message || '加载失败';
@@ -108,13 +114,33 @@ export default function DetailScreen() {
     return () => { cancelled = true; };
   }, [owner, repo]);
 
+  useEffect(() => {
+    if (!owner || !repo) return;
+    let cancelled = false;
+    setReadme('');
+    setDisplayReadme('');
+    setReadmeLoading(true);
+
+    (async () => {
+      const md = await fetchReadme(owner, repo).catch(() => '');
+      if (cancelled) return;
+      setReadme(md);
+      setReadmeLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [owner, repo]);
+
   // 翻译描述和 README（enabled/targetLang/原文 任一变化时重新执行）
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const desc = app?.description || '';
       if (!enabled) {
-        setDisplayDesc(desc);
-        setDisplayReadme(readme);
+        if (!cancelled) {
+          setDisplayDesc(desc);
+          setDisplayReadme(readme);
+        }
         return;
       }
       const [td, tr] = await Promise.all([
@@ -123,9 +149,12 @@ export default function DetailScreen() {
         // 避免翻译 API 把 height 译成 高度、破坏 Markdown 语法导致渲染失败
         readme ? translateMarkdown(readme, targetLang) : Promise.resolve(''),
       ]);
-      setDisplayDesc(td);
-      setDisplayReadme(tr);
+      if (!cancelled) {
+        setDisplayDesc(td);
+        setDisplayReadme(tr);
+      }
     })();
+    return () => { cancelled = true; };
   }, [app?.description, readme, enabled, targetLang]);
 
   const toggleFav = async () => {
@@ -379,7 +408,13 @@ export default function DetailScreen() {
         </View>
 
         {/* README Markdown 渲染 */}
-        {(displayReadme || readme) ? <MarkdownSection content={displayReadme || readme} owner={owner ?? ''} repo={repo ?? ''} /> : null}
+        {readmeLoading ? (
+          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4, alignItems: 'center', gap: 10 }}>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A', alignSelf: 'flex-start' }}>README</Text>
+            <ActivityIndicator size="small" color="#0969da" style={{ marginVertical: 12 }} />
+            <Text style={{ fontSize: 12, color: '#999' }}>README 加载中，不影响下载链接展示</Text>
+          </View>
+        ) : ((displayReadme || readme) ? <MarkdownSection content={displayReadme || readme} owner={owner ?? ''} repo={repo ?? ''} /> : null)}
       </ScrollView>
     </SafeAreaView>
   );

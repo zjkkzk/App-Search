@@ -28,6 +28,8 @@ const IS_WEB = Platform.OS === 'web';
 const IS_ANDROID = Platform.OS === 'android';
 const IS_IOS = Platform.OS === 'ios';
 const MAX_CONCURRENT = 3;
+const MAX_AUTO_RETRIES = 3;
+const AUTO_RETRY_BASE_DELAY = 1500;
 const PERM_DIR_NAME = 'dl_perm';
 const RESUME_KEY_PREFIX = '@openappstore/resume_';
 
@@ -100,6 +102,9 @@ const subscribers = new Set<ProgressCallback>();
 /** 活跃的下载会话（Android: ReactNativeBlobUtil session, iOS: DownloadResumable） */
 const activeSessions = new Map<string, any>();
 const speedSampler = new Map<string, { ts: number; bytes: number }>();
+const retryCounts = new Map<string, number>();
+const retryReadyAt = new Map<string, number>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function genId(): string { return `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 function notify(task: DownloadTask) { subscribers.forEach((cb) => cb({ ...task })); }
@@ -108,7 +113,8 @@ function notifyRefresh() { subscribers.forEach((cb) => cb({ id: REFRESH_EVENT })
 function flushQueue() {
   const active = [...tasks.values()].filter((t) => t.status === 'downloading').length;
   if (active >= MAX_CONCURRENT) return;
-  const next = [...tasks.values()].find((t) => t.status === 'pending');
+  const now = Date.now();
+  const next = [...tasks.values()].find((t) => t.status === 'pending' && (retryReadyAt.get(t.id) ?? 0) <= now);
   if (next) startTask(next.id);
 }
 
@@ -133,6 +139,77 @@ function mapErrorMessage(msg: string): string {
   if (msg.includes('503') || msg.includes('429') || msg.includes('Too Many Requests'))
     return '服务器繁忙，请稍后重试';
   return msg;
+}
+
+function isRetryableError(msg: string): boolean {
+  if (!msg) return true;
+  return [
+    'Network request failed',
+    'Unable to resolve host',
+    'timeout',
+    'ETIMEDOUT',
+    'read timed out',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ENOTFOUND',
+    'DNS',
+    'Download interrupted',
+    'IOException',
+    '503',
+    '429',
+    'Too Many Requests',
+  ].some((keyword) => msg.includes(keyword));
+}
+
+function getRetryDelay(retryCount: number): number {
+  return Math.min(12_000, AUTO_RETRY_BASE_DELAY * Math.pow(2, Math.max(0, retryCount - 1)));
+}
+
+function clearRetryTimer(id: string) {
+  const timer = retryTimers.get(id);
+  if (timer) clearTimeout(timer);
+  retryTimers.delete(id);
+}
+
+function resetRetryState(id: string) {
+  clearRetryTimer(id);
+  retryCounts.delete(id);
+  retryReadyAt.delete(id);
+}
+
+function scheduleRetry(id: string, message: string): boolean {
+  const task = tasks.get(id);
+  if (!task) return false;
+
+  const retryCount = (retryCounts.get(id) ?? 0) + 1;
+  if (retryCount > MAX_AUTO_RETRIES) {
+    resetRetryState(id);
+    return false;
+  }
+
+  const delay = getRetryDelay(retryCount);
+  retryCounts.set(id, retryCount);
+  retryReadyAt.set(id, Date.now() + delay);
+  clearRetryTimer(id);
+
+  task.status = 'pending';
+  task.error = `${message}，${Math.round(delay / 1000)} 秒后自动重试（${retryCount}/${MAX_AUTO_RETRIES}）`;
+  task.speed = 0;
+  task.eta = -1;
+  notify(task);
+
+  const timer = setTimeout(() => {
+    retryTimers.delete(id);
+    retryReadyAt.delete(id);
+    const latest = tasks.get(id);
+    if (!latest || latest.status !== 'pending') return;
+    latest.error = null;
+    notify(latest);
+    flushQueue();
+  }, delay);
+
+  retryTimers.set(id, timer);
+  return true;
 }
 
 // ─── 进度更新 ─────────────────────────────────────────────────────────────────
@@ -191,6 +268,8 @@ async function startTaskAndroid(id: string) {
   })
     .fetch('GET', task.url, {
       'User-Agent': 'OpenAppStore/1.0',
+      'Connection': 'keep-alive',
+      'Accept': 'application/octet-stream',
     })
     .progress({ count: 10, interval: 250 }, (received: number, total: number) => {
       applyProgress(id, Number(received), Number(total));
@@ -202,6 +281,7 @@ async function startTaskAndroid(id: string) {
     const res = await session;
     activeSessions.delete(id);
     speedSampler.delete(id);
+    resetRetryState(id);
 
     const t = tasks.get(id);
     if (!t) return;
@@ -246,8 +326,16 @@ async function startTaskAndroid(id: string) {
     // pause/cancel 已将 status 置为 paused/cancelled，不覆盖
     if (t.status !== 'downloading') { flushQueue(); return; }
 
+    const rawMsg = e?.message ?? '';
+    const mapped = mapErrorMessage(rawMsg);
+    if (isRetryableError(rawMsg) && scheduleRetry(id, mapped)) {
+      flushQueue();
+      return;
+    }
+
+    resetRetryState(id);
     t.status = 'failed';
-    t.error = mapErrorMessage(e?.message ?? '');
+    t.error = mapped;
     notify(t);
     flushQueue();
   }
@@ -298,7 +386,13 @@ async function startTaskIOS(id: string) {
   const resumable = fs.createDownloadResumable(
     task.url,
     localUri,
-    { headers: { 'User-Agent': 'OpenAppStore/1.0' } },
+    {
+      headers: {
+        'User-Agent': 'OpenAppStore/1.0',
+        'Connection': 'keep-alive',
+        'Accept': 'application/octet-stream',
+      },
+    },
     (dp: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
       applyProgress(id, dp.totalBytesWritten, dp.totalBytesExpectedToWrite);
       const now = Date.now();
@@ -323,6 +417,7 @@ async function startTaskIOS(id: string) {
     activeSessions.delete(id);
     speedSampler.delete(id);
     resumableRef = null;
+    resetRetryState(id);
     await AsyncStorage.removeItem(resumeKey).catch(() => null);
 
     const t = tasks.get(id);
@@ -383,8 +478,16 @@ async function startTaskIOS(id: string) {
 
     if (t.status !== 'downloading') { flushQueue(); return; }
 
+    const rawMsg = e?.message ?? '';
+    const mapped = mapErrorMessage(rawMsg);
+    if (isRetryableError(rawMsg) && scheduleRetry(id, mapped)) {
+      flushQueue();
+      return;
+    }
+
+    resetRetryState(id);
     t.status = 'failed';
-    t.error = mapErrorMessage(e?.message ?? '');
+    t.error = mapped;
     notify(t);
     await AsyncStorage.removeItem(resumeKey).catch(() => null);
     await fs.deleteAsync(tempDir, { idempotent: true }).catch(() => null);
@@ -397,8 +500,11 @@ async function startTaskIOS(id: string) {
 async function startTask(id: string) {
   const task = tasks.get(id);
   if (!task) return;
+  clearRetryTimer(id);
+  retryReadyAt.delete(id);
 
   if (IS_WEB) {
+    resetRetryState(id);
     task.status = 'completed';
     task.progress = 1;
     task.localUri = task.url;
@@ -454,6 +560,7 @@ export function enqueue(params: {
     return existing.id;
   }
   if (existing) {
+    resetRetryState(existing.id);
     tasks.delete(existing.id);
   }
 
@@ -473,6 +580,7 @@ export function retry(oldId: string): string {
   const old = tasks.get(oldId);
   if (!old) return '';
 
+  resetRetryState(oldId);
   tasks.delete(oldId);
 
   const newId = genId();
@@ -492,6 +600,8 @@ export function retry(oldId: string): string {
 export async function pause(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task || task.status !== 'downloading') return;
+  clearRetryTimer(id);
+  retryReadyAt.delete(id);
 
   if (IS_IOS) {
     const session = activeSessions.get(id);
@@ -525,6 +635,8 @@ export async function pause(id: string): Promise<void> {
 export async function resume(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task || task.status !== 'paused') return;
+  clearRetryTimer(id);
+  retryReadyAt.delete(id);
   task.status = 'pending';
   task.error = null;
   notify(task);
@@ -534,6 +646,7 @@ export async function resume(id: string): Promise<void> {
 export async function cancel(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task) return;
+  resetRetryState(id);
 
   const session = activeSessions.get(id);
   if (session) {
@@ -555,6 +668,7 @@ export async function cancel(id: string): Promise<void> {
 export async function deleteFile(id: string): Promise<void> {
   const task = tasks.get(id);
   if (!task) return;
+  resetRetryState(id);
 
   if (['downloading', 'pending'].includes(task.status)) {
     await cancel(id);
@@ -597,6 +711,7 @@ export function clearFinished(): void {
       }
       tasks.delete(id);
       speedSampler.delete(id);
+      resetRetryState(id);
     }
   }
   notifyRefresh();
@@ -605,6 +720,8 @@ export function clearFinished(): void {
 export async function pauseAll(): Promise<void> {
   for (const [id, task] of tasks) {
     if (task.status === 'downloading' || task.status === 'pending') {
+      clearRetryTimer(id);
+      retryReadyAt.delete(id);
       const session = activeSessions.get(id);
       if (session) {
         if (IS_IOS) {
@@ -643,6 +760,7 @@ export function resumeAll(): void {
 
 export function clearAllTasks(): void {
   for (const [id] of tasks.entries()) {
+    resetRetryState(id);
     const session = activeSessions.get(id);
     if (session) {
       if (IS_IOS) {

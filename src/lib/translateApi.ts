@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // 内存缓存：key = "to|text"
 const memCache = new Map<string, string>();
 // 升级版本号 → 旧 AsyncStorage 缓存自动废弃，强制使用新翻译逻辑重新翻译
-const STORAGE_KEY = 'oas_translate_cache_v3';
+const STORAGE_KEY = 'oas_translate_cache_v4';
 
 /** 从 AsyncStorage 加载持久化缓存 */
 let cacheLoaded = false;
@@ -283,6 +283,8 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
   scan(/<!--[\s\S]*?-->/g);
   // Markdown 图片 ![alt](url) — 整体保护
   scan(/!\[[^\]]*\]\([^)]*\)/g);
+  // Reference-style 图片 ![alt][ref]
+  scan(/!\[[^\]]*\]\[[^\]]*\]/g);
   // Markdown 链接 [text](url)
   //   - text 含 HTML 标签（如 <img>）→ 整个链接不翻译
   //   - text 为普通文字 → 保护 [ 字符本身（防止翻译 API 看到 [ 后自动配对 ] 破坏结构）
@@ -303,6 +305,10 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
       }
     }
   }
+  // Reference-style 链接 [text][ref] / [text][]
+  scan(/\[[^\]]+\]\[[^\]]*\]/g);
+  // 自动链接 <https://...> / <user@example.com>
+  scan(/<(https?:\/\/[^>\s]+|[^>\s]+@[^>\s]+)>/g);
   // 裸 URL（http/https）
   scan(/https?:\/\/[^\s)>\]"'`|]+/g);
 
@@ -345,6 +351,66 @@ interface MarkdownBlock {
   inTable?: boolean;    // true → 该行是表格数据行（非分隔行）
 }
 
+const HTML_VOID_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+
+function countMatches(text: string, re: RegExp): number {
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
+}
+
+function collectHtmlBlock(rawLines: string[], start: number): { lines: string[]; nextIndex: number } {
+  const first = rawLines[start];
+  const firstTrimmed = first.trim();
+
+  if (/^<!--/.test(firstTrimmed)) {
+    const chunk: string[] = [first];
+    let i = start + 1;
+    while (i < rawLines.length) {
+      chunk.push(rawLines[i]);
+      if (rawLines[i].includes('-->')) {
+        i++;
+        break;
+      }
+      i++;
+    }
+    return { lines: chunk, nextIndex: i };
+  }
+
+  const tagMatch = first.match(/^\s*<([a-zA-Z][\w:-]*)\b/);
+  if (!tagMatch) return { lines: [first], nextIndex: start + 1 };
+
+  const tagName = tagMatch[1].toLowerCase();
+  if (
+    HTML_VOID_TAGS.has(tagName)
+    || /\/>\s*$/.test(firstTrimmed)
+    || new RegExp(`</${tagName}>`, 'i').test(first)
+  ) {
+    return { lines: [first], nextIndex: start + 1 };
+  }
+
+  const openTagRe = new RegExp(`<${tagName}(?=[\\s>/])`, 'gi');
+  const closeTagRe = new RegExp(`</${tagName}>`, 'gi');
+  const chunk: string[] = [first];
+  let depth = countMatches(first, openTagRe) - countMatches(first, closeTagRe);
+  let i = start + 1;
+
+  while (i < rawLines.length) {
+    const line = rawLines[i];
+    const trimmed = line.trim();
+    chunk.push(line);
+    depth += countMatches(line, openTagRe);
+    depth -= countMatches(line, closeTagRe);
+    i++;
+    if (depth <= 0) break;
+    if (!trimmed) break;
+  }
+
+  return { lines: chunk, nextIndex: i };
+}
+
 function splitToBlocks(md: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   const rawLines = md.split('\n');
@@ -376,10 +442,11 @@ function splitToBlocks(md: string): MarkdownBlock[] {
       continue;
     }
 
-    // ── 纯 HTML 块级标签行（以 < 开头）
+    // ── HTML 块（单行/多行标签、注释）完整保留，避免翻译破坏标签结构
     if (/^\s*<[a-zA-Z!]/.test(line)) {
-      blocks.push({ lines: [line], raw: true });
-      i++;
+      const htmlBlock = collectHtmlBlock(rawLines, i);
+      blocks.push({ lines: htmlBlock.lines, raw: true });
+      i = htmlBlock.nextIndex;
       continue;
     }
 
@@ -476,7 +543,8 @@ function isStructurallyCorrupted(orig: StructCounts, translated: StructCounts): 
   const check = (o: number, t: number) => o > 0 && Math.abs(o - t) / o > 0.2;
   return check(orig.headings,   translated.headings)
       || check(orig.tableSeps,  translated.tableSeps)
-      || check(orig.codeFences, translated.codeFences);
+      || check(orig.codeFences, translated.codeFences)
+      || check(orig.listItems,  translated.listItems);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
