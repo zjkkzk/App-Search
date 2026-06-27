@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // 内存缓存：key = "to|text"
 const memCache = new Map<string, string>();
 // 升级版本号 → 旧 AsyncStorage 缓存自动废弃，强制使用新翻译逻辑重新翻译
-const STORAGE_KEY = 'oas_translate_cache_v5';
+const STORAGE_KEY = 'oas_translate_cache_v6';
 
 /** 从 AsyncStorage 加载持久化缓存 */
 let cacheLoaded = false;
@@ -270,9 +270,14 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
     }
   };
 
-  // 带链接的 Markdown 图片 [![alt](img_url)](link_url) — 整体保护（最高优先级）
-  // 嵌套结构：外层 ](link_url) 不在图片正则和链接正则覆盖范围内，必须单独处理
+  // ── 带链接的图片（最高优先级，必须在所有子格式之前匹配）─────────────────
+  // ① [![alt](img)](link)  — inline 图片 + inline 链接
   scan(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g);
+  // ② [![alt][img-ref]][link-ref]  — reference 图片 + reference 链接
+  //    外层 ][link-ref] 若无此正则会漏出翻译流程，导致 link-ref 被翻译成中文 ID
+  scan(/\[!\[[^\]]*\]\[[^\]]*\]\]\[[^\]]*\]/g);
+  // ③ [![alt](img)][link-ref]  — inline 图片 + reference 链接（混合格式）
+  scan(/\[!\[[^\]]*\]\([^)]*\)\]\[[^\]]*\]/g);
   // 行内代码 `...`
   scan(/`[^`]+`/g);
   // HTML 开标签（含属性，避免 height→高度 等被翻译）
