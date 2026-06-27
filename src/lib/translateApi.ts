@@ -269,6 +269,9 @@ function splitBodyToSegments(body: string, inTable: boolean): Segment[] {
     }
   };
 
+  // 带链接的 Markdown 图片 [![alt](img_url)](link_url) — 整体保护（最高优先级）
+  // 嵌套结构：外层 ](link_url) 不在图片正则和链接正则覆盖范围内，必须单独处理
+  scan(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g);
   // 行内代码 `...`
   scan(/`[^`]+`/g);
   // HTML 开标签（含属性，避免 height→高度 等被翻译）
