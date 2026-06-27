@@ -150,30 +150,29 @@ export default function DetailScreen() {
   }, [app?.description, enabled, targetLang]);
 
   // ── Effect B：README 渲染（原文 / 翻译后）
-  // 只依赖 readme/enabled/targetLang，不依赖 app?.description，
-  // 避免 setApp() 触发本 effect 时 readme 仍为 '' 而意外清空 readmeToRender。
+  // 只依赖 readme/enabled/targetLang，不依赖 app?.description。
+  // 关键策略：readme 一旦有值，立即设置 readmeToRender（原文先显示），
+  // 再异步翻译并覆盖。这样无论 context 是否异步初始化、effect 是否被
+  // cancel，README 都不会消失——最坏情况仅退化为显示原文。
   useEffect(() => {
-    // README 尚未加载完成，保持空状态等待
     if (!readme) {
       setReadmeToRender('');
       setReadmeTranslating(false);
       return;
     }
+    // 先用原文保证 README 立即可见，翻译完成后再覆盖（降级保障）
+    setReadmeToRender(readme);
     if (!enabled) {
-      // 翻译关闭：直接用原文，WebView 只加载一次
-      setReadmeToRender(readme);
       setReadmeTranslating(false);
       return;
     }
-    // 翻译开启：先显示"翻译中"骨架，翻译完成后一次性传入 MarkdownSection，
-    // 保证 WebView 整个生命周期只加载一次最终内容，不产生重载闪烁
+    // 翻译开启：后台翻译，完成后无缝替换，不遮盖已显示的原文
     let cancelled = false;
     setReadmeTranslating(true);
     (async () => {
-      // Markdown-aware 翻译：保护代码块/HTML 标签/链接/URL，只翻译可读文字
       const tr = await translateMarkdown(readme, targetLang);
       if (!cancelled) {
-        setReadmeToRender(tr || readme); // 翻译失败降级原文
+        if (tr) setReadmeToRender(tr); // 翻译成功则替换；失败时原文已显示
         setReadmeTranslating(false);
       }
     })();
@@ -437,13 +436,18 @@ export default function DetailScreen() {
             <ActivityIndicator size="small" color="#0969da" style={{ marginVertical: 12 }} />
             <Text style={{ fontSize: 12, color: '#999' }}>README 加载中，不影响下载链接展示</Text>
           </View>
-        ) : readmeTranslating ? (
-          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 16, marginTop: 4, alignItems: 'center', gap: 10 }}>
-            <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A1A1A', alignSelf: 'flex-start' }}>README</Text>
-            <ActivityIndicator size="small" color="#0969da" style={{ marginVertical: 12 }} />
-            <Text style={{ fontSize: 12, color: '#999' }}>翻译中...</Text>
+        ) : readmeToRender ? (
+          <View>
+            {/* 翻译中：小提示悬浮在 README 上方，不遮挡原文，避免空白 */}
+            {readmeTranslating && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingBottom: 4 }}>
+                <ActivityIndicator size="small" color="#0969da" />
+                <Text style={{ fontSize: 12, color: '#0969da' }}>翻译中...</Text>
+              </View>
+            )}
+            <MarkdownSection content={readmeToRender} owner={owner ?? ''} repo={repo ?? ''} />
           </View>
-        ) : (readmeToRender ? <MarkdownSection content={readmeToRender} owner={owner ?? ''} repo={repo ?? ''} /> : null)}
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
