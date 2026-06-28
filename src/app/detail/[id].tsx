@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Languages } from 'lucide-react-native';
 import { fetchRepoDetail, fetchReleases, fetchLatestRelease, fetchReadme, getPlatformFromFilename, filterInstallAssets, filterVerificationAssets, checkIfStarred, starRepo, unstarRepo } from '@/lib/github';
 import { addFavorite, removeFavorite, isFavorite, addDownloadRecord } from '@/lib/database';
 import { addAppEvent } from '@/lib/events';
@@ -33,7 +34,9 @@ export default function DetailScreen() {
   const { owner, repo } = useLocalSearchParams<{ owner: string; repo: string }>();
   const router = useRouter();
   const { enqueue, findByUrl } = useDownload();
-  const { translate, enabled, targetLang } = useTranslation();
+  const { translate, enabled, targetLang, setEnabled, setTargetLang } = useTranslation();
+  // 翻译中状态（用于顶部按钮 loading 指示）
+  const [translating, setTranslating] = useState(false);
   // 直接打开详情页时导航栈为空，canGoBack() 为 false → 回首页而非 back()
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -145,6 +148,7 @@ export default function DetailScreen() {
         }
         return;
       }
+      setTranslating(true);
       const [td, tr] = await Promise.all([
         desc ? translate(desc) : Promise.resolve(''),
         readme ? translateMarkdown(readme, targetLang) : Promise.resolve(''),
@@ -152,6 +156,7 @@ export default function DetailScreen() {
       if (!cancelled) {
         setDisplayDesc(td);
         setDisplayReadme(tr || ''); // 翻译失败保持空，渲染 fallback 到原文
+        setTranslating(false);
       }
     })();
     return () => { cancelled = true; };
@@ -201,6 +206,31 @@ export default function DetailScreen() {
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </Pressable>
         <Text style={{ flex: 1, fontSize: 17, fontWeight: '600', color: '#1A1A1A' }} numberOfLines={1}>{app.name}</Text>
+        {/* 翻译快捷按钮：一键开启/关闭中文翻译 */}
+        <Pressable
+          onPress={() => {
+            if (enabled) {
+              setEnabled(false);
+            } else {
+              setEnabled(true);
+              setTargetLang('zh');
+            }
+          }}
+          hitSlop={10}
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            backgroundColor: enabled ? '#1677FF' : '#F0F0F0',
+            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, marginRight: 10,
+          }}
+        >
+          {translating
+            ? <ActivityIndicator size={13} color={enabled ? '#fff' : '#888'} />
+            : <Languages size={14} color={enabled ? '#fff' : '#888'} />
+          }
+          <Text style={{ fontSize: 12, fontWeight: '600', color: enabled ? '#fff' : '#888' }}>
+            {enabled ? '译文' : '翻译'}
+          </Text>
+        </Pressable>
         <Pressable onPress={toggleFav} hitSlop={12}>
           <Ionicons name={favored ? 'heart' : 'heart-outline'} size={24} color={favored ? '#FF4D88' : '#888'} />
         </Pressable>
