@@ -9,9 +9,11 @@ import type { AppItem } from '@/types';
 
 interface AppCardProps {
   app: AppItem;
+  /** 外部已翻译好的描述文本（列表页批量翻译后传入，优先于 TranslatedText 单独翻译） */
+  descOverride?: string;
 }
 
-export default function AppCard({ app }: AppCardProps) {
+export default function AppCard({ app, descOverride }: AppCardProps) {
   const router = useRouter();
 
   const handlePress = () => {
@@ -61,14 +63,20 @@ export default function AppCard({ app }: AppCardProps) {
             </View>
           </View>
 
-          {/* 功能简介 */}
+          {/* 功能简介：外部已翻译时直接渲染，否则通过 TranslatedText 单独翻译 */}
           {app.description ? (
-            <TranslatedText
-              style={{ fontSize: 13, color: '#666666', lineHeight: 18 }}
-              numberOfLines={2}
-            >
-              {app.description}
-            </TranslatedText>
+            descOverride !== undefined ? (
+              <Text style={{ fontSize: 13, color: '#666666', lineHeight: 18 }} numberOfLines={2}>
+                {descOverride || app.description}
+              </Text>
+            ) : (
+              <TranslatedText
+                style={{ fontSize: 13, color: '#666666', lineHeight: 18 }}
+                numberOfLines={2}
+              >
+                {app.description}
+              </TranslatedText>
+            )
           ) : null}
 
           {/* 语言、平台标签、Star/Fork / 版本 */}

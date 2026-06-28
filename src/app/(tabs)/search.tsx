@@ -13,6 +13,8 @@ import { smartSearch } from '@/lib/github';
 import { supabase } from '@/client/supabase';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
+import { useTranslation } from '@/ctx/TranslationContext';
+import { translateBatch } from '@/lib/translateApi';
 
 // ─── 常量 ────────────────────────────────────────────────────────────────────
 const BLOCKED_PATTERNS = [
@@ -74,6 +76,7 @@ function filtersActive(f: FilterState): boolean {
 // ─── 主组件 ──────────────────────────────────────────────────────────────────
 export default function SearchTab() {
   useAndroidExitBack();
+  const { enabled: translateEnabled, targetLang } = useTranslation();
 
   const inputRef = useRef<TextInput>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -85,6 +88,8 @@ export default function SearchTab() {
   const [history, setHistory] = useState<string[]>([]);
   const [hotWords, setHotWords] = useState<string[]>([]);
   const [results, setResults] = useState<AppItem[]>([]);
+  // id → 翻译后 description（批量翻译后填充）
+  const [descMap, setDescMap] = useState<Map<number, string>>(new Map());
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState('');
@@ -188,6 +193,18 @@ export default function SearchTab() {
         });
       } else {
         setResults(items);
+      }
+
+      // 批量翻译描述，消除逐条闪烁
+      if (translateEnabled && items.length) {
+        const descs = items.map((a) => a.description || '');
+        translateBatch(descs, targetLang).then((translated) => {
+          setDescMap((prev) => {
+            const next = new Map(prev);
+            items.forEach((a, i) => { next.set(a.id, translated[i] ?? a.description ?? ''); });
+            return next;
+          });
+        }).catch(() => {});
       }
 
       loadHotWords();
@@ -425,7 +442,7 @@ export default function SearchTab() {
           data={results}
           keyExtractor={(item) => String(item.id)}
           keyboardShouldPersistTaps="handled"
-          renderItem={({ item }) => <AppCard app={item} />}
+          renderItem={({ item }) => <AppCard app={item} descOverride={descMap.get(item.id)} />}
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.5}
           contentContainerStyle={{ paddingBottom: 24 }}

@@ -9,6 +9,7 @@ import { getToken } from '@/lib/token';
 import { fetchUserStarred, unstarRepo } from '@/lib/github';
 import type { FavoriteItem } from '@/types';
 import AppIcon from '@/components/openappstore/AppIcon';
+import TranslatedText from '@/components/openappstore/TranslatedText';
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
 
@@ -194,9 +195,13 @@ export default function FavoritesScreen() {
             <AppIcon owner={item.owner} url={item.avatar_url} name={item.app_name} size={44} />
             <View style={{ flex: 1, gap: 3 }}>
               <Text style={{ fontWeight: '600', color: '#1A1A1A' }}>{item.app_name}</Text>
-              <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={1}>
-                {item.description || item.owner}
-              </Text>
+              {item.description ? (
+                <TranslatedText style={{ fontSize: 12, color: '#888' }} numberOfLines={1}>
+                  {item.description}
+                </TranslatedText>
+              ) : (
+                <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={1}>{item.owner}</Text>
+              )}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <Ionicons name="star" size={11} color="#FFB300" />
                 <Text style={{ fontSize: 12, color: '#888' }}>

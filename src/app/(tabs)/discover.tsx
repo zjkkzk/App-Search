@@ -9,6 +9,8 @@ import { clearAllCache } from '@/lib/cache';
 import type { AppItem } from '@/types';
 import AppCard from '@/components/openappstore/AppCard';
 import SkeletonCard from '@/components/openappstore/SkeletonCard';
+import { useTranslation } from '@/ctx/TranslationContext';
+import { translateBatch } from '@/lib/translateApi';
 import {
   TAXONOMY_CATEGORIES,
   PLATFORM_LIST,
@@ -29,6 +31,7 @@ const INSTALL_OPTIONS = [
 export default function DiscoverTab() {
   useAndroidExitBack();
   const params = useLocalSearchParams();
+  const { enabled: translateEnabled, targetLang } = useTranslation();
 
   // 筛选状态
   const [platform,      setPlatform]      = useState<string>('全平台');
@@ -40,6 +43,8 @@ export default function DiscoverTab() {
 
   // 数据状态
   const [apps,        setApps]        = useState<AppItem[]>([]);
+  // id → 翻译后的 description（批量翻译完成后填充）
+  const [descMap,     setDescMap]     = useState<Map<number, string>>(new Map());
   const [loading,     setLoading]     = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing,  setRefreshing]  = useState(false);
@@ -87,6 +92,18 @@ export default function DiscoverTab() {
       else setApps((prev) => [...prev, ...items]);
       pageRef.current = pageNum;
       setHasMore(items.length === 20);
+
+      // 批量翻译描述：翻译已开启时，加载完数据后一次性翻译全部，消除逐条闪烁
+      if (translateEnabled && items.length) {
+        const descs = items.map((a) => a.description || '');
+        translateBatch(descs, targetLang).then((translated) => {
+          setDescMap((prev) => {
+            const next = new Map(prev);
+            items.forEach((a, i) => { next.set(a.id, translated[i] ?? a.description ?? ''); });
+            return next;
+          });
+        }).catch(() => {});
+      }
     } catch (e: any) {
       setError(e?.message || '加载失败，请检查网络后重试');
     } finally {
@@ -103,6 +120,7 @@ export default function DiscoverTab() {
     lastLoadedAtRef.current = 0;
     pageRef.current = 1;
     setApps([]);
+    setDescMap(new Map());
     setHasMore(false);
     loadData(1, false);
   };
@@ -158,7 +176,7 @@ export default function DiscoverTab() {
       <FlatList
         data={apps}
         keyExtractor={(item) => String(item.id)}
-        renderItem={({ item }) => <AppCard app={item} />}
+        renderItem={({ item }) => <AppCard app={item} descOverride={descMap.get(item.id)} />}
         onRefresh={() => { pageRef.current = 1; loadData(1, true); }}
         refreshing={refreshing}
         onEndReached={() => {
