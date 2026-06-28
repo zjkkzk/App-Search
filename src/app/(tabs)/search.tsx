@@ -340,7 +340,8 @@ export default function SearchTab() {
       {isActive && (
         <ScrollView
           horizontal showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, gap: 6, flexDirection: 'row' }}
+          style={{ flexShrink: 0 }}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 6, gap: 6, flexDirection: 'row', alignItems: 'center' }}
         >
           {filters.platform !== '全平台' && (
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF2FF',
