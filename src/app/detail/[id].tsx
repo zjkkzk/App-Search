@@ -167,10 +167,10 @@ export default function DetailScreen() {
     if (!app) return;
     if (favored) {
       // 取消收藏：本地移除 + 取消 GitHub Star（有 Token 时）
+      // 注意：取消收藏不上报 favorite 事件，只在「添加收藏」时计入收藏榜
       await removeFavorite(app.id);
       setFavored(false);
       unstarRepo(app.owner, app.repo).catch(() => {});
-      addAppEvent({ event_type: 'favorite', app_id: app.id, app_name: app.name, owner: owner ?? '', repo: repo ?? '', avatar_url: app.avatar_url ?? '' }).catch(() => {});
     } else {
       // 添加收藏：本地保存 + 给 GitHub 打 Star（有 Token 时）
       await addFavorite(app);
