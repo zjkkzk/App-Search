@@ -10,7 +10,6 @@ import { useAndroidExitBack } from '@/hooks/useAndroidExitBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/client/supabase';
-import { uploadPendingEvents } from '@/lib/events';
 
 import AppIcon from '@/components/openappstore/AppIcon';
 
@@ -44,7 +43,7 @@ const PERIOD_TABS: { key: Period; label: string }[] = [
 ];
 
 const MEDAL_COLORS = ['#FFD700', '#C0C0C0', '#CD7F32'];
-const AGGREGATE_INTERVAL_MS = 5 * 60 * 1000;
+const AGGREGATE_INTERVAL_MS = 2 * 60 * 1000; // 2 分钟节流，减少用户感知延迟
 const AGGREGATE_CURSOR_KEY = 'oas_rankings_last_aggregate_at';
 
 async function readAggregateCursor(): Promise<number> {
@@ -122,16 +121,13 @@ export default function RankingScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      // 上报本地事件，然后无论是否有新事件都自动聚合一次，确保榜单始终最新
-      uploadPendingEvents((name, opts) =>
-        supabase.functions.invoke(name, { body: opts.body as Record<string, unknown> }).then(({ data, error }) => {
-          if (error) throw error;
-          return (data ?? { ok: true, inserted: 0 }) as { ok?: boolean; inserted?: number };
-        })
-      ).then(async (uploaded) => {
-        await maybeAggregateRankings(uploaded > 0);
-        loadRankings(rankType, period);
-      }).catch(() => { loadRankings(rankType, period); });
+      // 事件已由 addAppEvent() 内部的 fire-and-forget 自动上传（uploadPendingEventsToTrack）。
+      // 这里只需受 throttle 控制地触发聚合，再加载榜单，无需重复上报。
+      // 原来依赖 uploadPendingEvents 返回的 uploaded > 0 来判断是否强制聚合，
+      // 但两个上传函数共享同一个 cursor，导致 uploaded 永远为 0，强制聚合从不触发。
+      maybeAggregateRankings(false)
+        .then(() => loadRankings(rankType, period))
+        .catch(() => loadRankings(rankType, period));
     }, [loadRankings, maybeAggregateRankings, rankType, period])
   );
 
