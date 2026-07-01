@@ -161,7 +161,7 @@ export default function DetailScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [app?.description, readme, enabled, targetLang]);
+  }, [app?.description, readme, enabled, targetLang, translate]);
 
   const toggleFav = async () => {
     if (!app) return;
