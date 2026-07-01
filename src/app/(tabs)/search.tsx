@@ -215,6 +215,7 @@ export default function SearchTab() {
         order: 'desc',
         page: pageNum,
         per_page: 30,
+        hasInstallableAssets: activeFilters.hasAssets,
       });
       if (searchIdRef.current !== thisSearchId) return;
 
@@ -537,14 +538,13 @@ export default function SearchTab() {
 
       {/* ── 高级筛选 Modal ─────────────────────────────────────── */}
       <Modal visible={filterVisible} transparent animationType="slide" onRequestClose={cancelFilter}>
-        <Pressable
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' }}
-          onPress={cancelFilter}
-        />
-        <View style={{
-          backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-          paddingBottom: 36, paddingTop: 12, maxHeight: '85%',
-        }}>
+        {/* flex:1 + justifyContent:'flex-end' 确保面板贴底，Pressable 撑开上方遮罩区域 */}
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' }}>
+          <Pressable style={{ flex: 1 }} onPress={cancelFilter} />
+          <View style={{
+            backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+            paddingBottom: 36, paddingTop: 12, maxHeight: '85%',
+          }}>
           {/* 把手 */}
           <View style={{ width: 36, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, alignSelf: 'center', marginBottom: 12 }} />
 
@@ -662,6 +662,7 @@ export default function SearchTab() {
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>应用筛选</Text>
             </Pressable>
           </View>
+        </View>
         </View>
       </Modal>
     </SafeAreaView>
