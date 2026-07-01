@@ -207,7 +207,7 @@ const SMART_SEARCH_URL = `${SUPABASE_URL}/functions/v1/smart-search`
  */
 export async function smartSearch(
   q: string,
-  options: { sort?: string; order?: string; page?: number; per_page?: number } = {}
+  options: { sort?: string; order?: string; page?: number; per_page?: number; hasInstallableAssets?: boolean } = {}
 ): Promise<{ items: AppItem[]; total_count: number; has_more: boolean }> {
   const body = {
     q,
@@ -215,6 +215,7 @@ export async function smartSearch(
     order: options.order || 'desc',
     page: options.page || 1,
     per_page: options.per_page || 30,
+    has_installable_assets: options.hasInstallableAssets ?? true,
     token: cachedToken,
   }
   try {
