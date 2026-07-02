@@ -249,18 +249,25 @@ async function startTaskAndroid(id: string) {
   task.totalBytes = 0;
   notify(task);
 
-  // 下载到应用私有缓存目录：路径明确、FileProvider 的 cache-path 覆盖此目录
+  // 下载到公共 Downloads 目录，由系统 DownloadManager 执行
+  // 注意：useDownloadManager:true 时数据流经系统服务而非 JS 堆，不会 OOM
+  // provider_paths.xml 中 external-path 覆盖 /storage/emulated/0/，
   // actionViewIntent 可通过 FileProvider 生成合法 content URI 触发安装器
-  const cacheDir = ReactNativeBlobUtil.fs.dirs.CacheDir;
-  const downloadPath = `${cacheDir}/${task.filename}`;
+  const downloadPath = `${ReactNativeBlobUtil.fs.dirs.DownloadDir}/${task.filename}`;
 
   // 删除可能存在的旧文件
   await ReactNativeBlobUtil.fs.unlink(downloadPath).catch(() => null);
 
   const session = ReactNativeBlobUtil.config({
-    // 只指定目标路径，让库直接流式写文件；不设 fileCache/addAndroidDownloads
-    // fileCache:false 会把数据写入内存，对大 APK 会 OOM 闪退，必须去掉
-    path: downloadPath,
+    addAndroidDownloads: {
+      useDownloadManager: true,
+      notification: true,
+      path: downloadPath,
+      mime: getMimeType(task.filename),
+      title: task.appName,
+      description: `正在下载 ${task.filename}`,
+      mediaScannable: true,
+    },
   })
     .fetch('GET', task.url, {
       'User-Agent': 'OpenAppStore/1.0',
