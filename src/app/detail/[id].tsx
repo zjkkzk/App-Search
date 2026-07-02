@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Linking, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAndroidGoBack } from '@/hooks/useAndroidGoBack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -325,17 +325,44 @@ export default function DetailScreen() {
                                 {formatBytes(asset.size)}  {asset.download_count.toLocaleString()}次下载
                               </Text>
                             </View>
-                            {/* 下载按钮 */}
+                            {/* 下载/安装按钮 */}
                             <Pressable
                               onPress={async () => {
                                 if (!app) return;
-                                // 检查是否已在下载队列或已完成
                                 const existing = findByUrl(asset.browser_download_url);
-                                if (existing && existing.status !== 'failed' && existing.status !== 'cancelled') {
+                                const isApk = asset.name.toLowerCase().endsWith('.apk');
+
+                                // 已下载完成：Android APK 直接触发安装，其他跳转下载列表
+                                if (existing && existing.status === 'completed') {
+                                  if (isApk && Platform.OS === 'android' && existing.localUri) {
+                                    try {
+                                      const RNFB = await import('react-native-blob-util');
+                                      const filePath = existing.localUri.replace('file://', '');
+                                      const fileExists = await RNFB.default.fs.exists(filePath);
+                                      if (fileExists) {
+                                        await RNFB.default.android.actionViewIntent(
+                                          filePath,
+                                          'application/vnd.android.package-archive',
+                                        );
+                                        return;
+                                      }
+                                      // 文件已被清理，重新下载
+                                    } catch (e: any) {
+                                      console.warn('[Detail] 安装失败，重新下载:', e?.message);
+                                    }
+                                  } else {
+                                    router.push('/downloads' as any);
+                                    return;
+                                  }
+                                }
+
+                                // 正在下载中/等待中 → 跳转下载列表
+                                if (existing && (existing.status === 'downloading' || existing.status === 'pending' || existing.status === 'paused')) {
                                   router.push('/downloads' as any);
                                   return;
                                 }
-                                // 加入 App 内下载队列
+
+                                // 新建下载或文件已不存在时重新下载
                                 try {
                                   addDownloadRecord({
                                     app_id: app.id,
@@ -366,7 +393,20 @@ export default function DetailScreen() {
                               }}
                               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
                                 borderWidth: 1.5, borderColor: '#1677FF' }}>
-                              <Text style={{ fontSize: 13, fontWeight: '600', color: '#1677FF' }}>下载</Text>
+                              <Text style={{ fontSize: 13, fontWeight: '600', color: '#1677FF' }}>
+                                {(() => {
+                                  const existing = findByUrl(asset.browser_download_url);
+                                  if (!existing) return '下载';
+                                  if (existing.status === 'completed') {
+                                    return asset.name.toLowerCase().endsWith('.apk') && Platform.OS === 'android'
+                                      ? '安装'
+                                      : '查看';
+                                  }
+                                  if (existing.status === 'downloading' || existing.status === 'pending') return '下载中';
+                                  if (existing.status === 'paused') return '继续';
+                                  return '下载';
+                                })()}
+                              </Text>
                             </Pressable>
                           </View>
                         );
