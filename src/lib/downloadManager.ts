@@ -249,21 +249,25 @@ async function startTaskAndroid(id: string) {
   task.totalBytes = 0;
   notify(task);
 
-  // 文件直接存到公共 Downloads 目录
-  const downloadPath = `${ReactNativeBlobUtil.fs.dirs.DownloadDir}/${task.filename}`;
+  // 下载到应用私有缓存目录：路径明确、FileProvider 的 cache-path 覆盖此目录
+  // actionViewIntent 可通过 FileProvider 生成合法 content URI 触发安装器
+  const cacheDir = ReactNativeBlobUtil.fs.dirs.CacheDir;
+  const downloadPath = `${cacheDir}/${task.filename}`;
 
   // 删除可能存在的旧文件
   await ReactNativeBlobUtil.fs.unlink(downloadPath).catch(() => null);
 
   const session = ReactNativeBlobUtil.config({
+    fileCache: false,
+    path: downloadPath,
+    // 通知栏进度（不依赖系统 DownloadManager，避免 Android 10+ Scoped Storage 路径问题）
     addAndroidDownloads: {
-      useDownloadManager: true,
+      useDownloadManager: false,
       notification: true,
       path: downloadPath,
       mime: getMimeType(task.filename),
       title: task.appName,
       description: `正在下载 ${task.filename}`,
-      mediaScannable: true,
     },
   })
     .fetch('GET', task.url, {
