@@ -363,46 +363,48 @@ export default function SearchTab() {
         )}
       </View>
 
-      {/* 激活筛选条件标签栏 */}
+      {/* 激活筛选条件标签栏：外层 View 固定高度，避免 ScrollView 被父容器 stretch 拉伸 */}
       {isActive && (
-        <ScrollView
-          horizontal showsHorizontalScrollIndicator={false}
-          style={{ flexShrink: 0, height: 36 }}
-          contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 4, gap: 6, flexDirection: 'row', alignItems: 'center' }}
-        >
-          {filters.platform !== '全平台' && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF2FF',
-              borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, gap: 4 }}>
-              <Text style={{ fontSize: 12, color: '#1677FF' }}>{filters.platform}</Text>
-            </View>
-          )}
-          {filters.language !== '全部' && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF2FF',
-              borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
-              <Text style={{ fontSize: 12, color: '#1677FF' }}>{filters.language}</Text>
-            </View>
-          )}
-          {filters.minStars > 0 && (
-            <View style={{ backgroundColor: '#EAF2FF', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
-              <Text style={{ fontSize: 12, color: '#1677FF' }}>
-                {filters.minStars >= 1000 ? `${filters.minStars / 1000}k` : filters.minStars}+ ⭐
-              </Text>
-            </View>
-          )}
-          {filters.sort !== 'stars' && (
-            <View style={{ backgroundColor: '#EAF2FF', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
-              <Text style={{ fontSize: 12, color: '#1677FF' }}>{sortLabel}</Text>
-            </View>
-          )}
-          <Pressable
-            onPress={handleClearFilters}
-            style={{ backgroundColor: '#FFF2F0', borderRadius: 12, paddingHorizontal: 10,
-              paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }}
+        <View style={{ height: 36, flexDirection: 'row' }}>
+          <ScrollView
+            horizontal showsHorizontalScrollIndicator={false}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 12, gap: 6, flexDirection: 'row', alignItems: 'center', height: 36 }}
           >
-            <X size={11} color="#FF4D4F" />
-            <Text style={{ fontSize: 12, color: '#FF4D4F' }}>清除筛选</Text>
-          </Pressable>
-        </ScrollView>
+            {filters.platform !== '全平台' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF2FF',
+                borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, gap: 4 }}>
+                <Text style={{ fontSize: 12, color: '#1677FF' }}>{filters.platform}</Text>
+              </View>
+            )}
+            {filters.language !== '全部' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#EAF2FF',
+                borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ fontSize: 12, color: '#1677FF' }}>{filters.language}</Text>
+              </View>
+            )}
+            {filters.minStars > 0 && (
+              <View style={{ backgroundColor: '#EAF2FF', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ fontSize: 12, color: '#1677FF' }}>
+                  {filters.minStars >= 1000 ? `${filters.minStars / 1000}k` : filters.minStars}+ ⭐
+                </Text>
+              </View>
+            )}
+            {filters.sort !== 'stars' && (
+              <View style={{ backgroundColor: '#EAF2FF', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ fontSize: 12, color: '#1677FF' }}>{sortLabel}</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={handleClearFilters}
+              style={{ backgroundColor: '#FFF2F0', borderRadius: 12, paddingHorizontal: 10,
+                paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }}
+            >
+              <X size={11} color="#FF4D4F" />
+              <Text style={{ fontSize: 12, color: '#FF4D4F' }}>清除筛选</Text>
+            </Pressable>
+          </ScrollView>
+        </View>
       )}
 
       {/* ── 主内容区 ─────────────────────────────────────────── */}
