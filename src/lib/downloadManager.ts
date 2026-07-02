@@ -249,10 +249,7 @@ async function startTaskAndroid(id: string) {
   task.totalBytes = 0;
   notify(task);
 
-  // 下载到公共 Downloads 目录，由系统 DownloadManager 执行
-  // 注意：useDownloadManager:true 时数据流经系统服务而非 JS 堆，不会 OOM
-  // provider_paths.xml 中 external-path 覆盖 /storage/emulated/0/，
-  // actionViewIntent 可通过 FileProvider 生成合法 content URI 触发安装器
+  // 文件直接存到公共 Downloads 目录
   const downloadPath = `${ReactNativeBlobUtil.fs.dirs.DownloadDir}/${task.filename}`;
 
   // 删除可能存在的旧文件
