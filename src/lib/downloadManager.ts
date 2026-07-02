@@ -258,17 +258,9 @@ async function startTaskAndroid(id: string) {
   await ReactNativeBlobUtil.fs.unlink(downloadPath).catch(() => null);
 
   const session = ReactNativeBlobUtil.config({
-    fileCache: false,
+    // 只指定目标路径，让库直接流式写文件；不设 fileCache/addAndroidDownloads
+    // fileCache:false 会把数据写入内存，对大 APK 会 OOM 闪退，必须去掉
     path: downloadPath,
-    // 通知栏进度（不依赖系统 DownloadManager，避免 Android 10+ Scoped Storage 路径问题）
-    addAndroidDownloads: {
-      useDownloadManager: false,
-      notification: true,
-      path: downloadPath,
-      mime: getMimeType(task.filename),
-      title: task.appName,
-      description: `正在下载 ${task.filename}`,
-    },
   })
     .fetch('GET', task.url, {
       'User-Agent': 'OpenAppStore/1.0',
